@@ -122,6 +122,13 @@ get_player_forward :: proc(transform: ^PlayerTransform) -> rl.Vector2 {
     return rl.Vector2Rotate(start_direction, rotation_corrected)
 }
 
+get_player_sideways :: proc(transform: ^PlayerTransform) -> rl.Vector2 {
+    start_direction := rl.Vector2 {1.0, 0.0}
+    rotation_corrected := -transform.rotation * rl.DEG2RAD // Convert to radians and make the rotation clockwise
+
+    return rl.Vector2Rotate(start_direction, rotation_corrected + rl.PI/2)
+}
+
 get_movement_direction_from_input :: proc() -> rl.Vector2 {
     movement_direction := rl.Vector2(0)
 
@@ -144,6 +151,29 @@ get_movement_direction_from_input :: proc() -> rl.Vector2 {
 GRAVITY :: 10.0
 SPEED :: 5.0
 SENSITIVITY :: 5.0
+
+get_forward_input_force :: proc(playerTransform: ^PlayerTransform) -> Force
+{
+    movementFromInput := get_movement_direction_from_input()
+    forwardVector := get_player_forward(playerTransform)
+    forward3d := rl.Vector3 { forwardVector.x, 0, forwardVector.y }
+
+    return Force { movementFromInput.x * SPEED * forward3d, true } 
+}
+
+get_sideways_input_force :: proc(playerTransform: ^PlayerTransform) -> Force
+{
+    movementFromInput := get_movement_direction_from_input()
+    sidewaysVector := get_player_sideways(playerTransform)
+    sideways3d := rl.Vector3 { sidewaysVector.x, 0, sidewaysVector.y }
+
+    return Force { movementFromInput.y * SPEED *sideways3d, true } 
+}
+
+get_gravity_force :: proc() -> Force
+{
+    return Force {rl.Vector3{0, -GRAVITY, 0}, false}
+} 
 
 update_player_transform :: proc(playerTransform: ^PlayerTransform, dt: f32) {
     // Position
@@ -206,22 +236,22 @@ get_bounding_box_collisions :: proc(box: rl.BoundingBox, colliders: []rl.Boundin
 // figure out the face of the bb which we collided with
 // stop only the part of the vector which would take us into the collider, instead slide along the wall
 
-
-player_position_valid :: proc(playerBb: rl.BoundingBox, colliders: []rl.BoundingBox) -> (ok: bool, ground_collision: bool)
+TryGetCollidingBox :: proc(playerBb: rl.BoundingBox, colliders: []rl.BoundingBox) -> (rl.BoundingBox, bool)
 {
     for collider in colliders {
         colliding := rl.CheckCollisionBoxes(playerBb, collider)
         if colliding {
-            ground_collision := collider.max.y >= playerBb.min.y
-            return false, ground_collision
+            return collider, true
         }
     }
 
-    return true, false
+    return rl.BoundingBox{}, false
 }
 
-// TODO: this will need changes as it gives the wrong vector now
-GetWallSlidingDirection :: proc(box1, box2: rl.BoundingBox) -> rl.Vector3
+// This doesn't work in the literal edge case when the intersection is just on the edge
+// if the boxes are not the same size. The relative vector will intersect the wrong face and we will get stuck.
+// TODO: I am not sure how to fix this.
+GetNormalOfCollidedFace :: proc(box1, box2: rl.BoundingBox) -> rl.Vector3
 {
     box1Center := (box1.max - box1.min) / 2 + box1.min
     box2Center := (box2.max - box2.min) / 2 + box2.min
@@ -244,11 +274,33 @@ GetWallSlidingDirection :: proc(box1, box2: rl.BoundingBox) -> rl.Vector3
     return rl.Vector3{0, 1 if positiveY else -1, 0}
 }
 
+GetWallSlidingDirection :: proc(playerBox, collisioxBox: rl.BoundingBox, movementDirection: rl.Vector3) -> rl.Vector3
+{
+    collisionNormal := GetNormalOfCollidedFace(playerBox, collisioxBox)
+    leftSlidingDir := collisionNormal.zyx
+    rightSlidingDir := -collisionNormal.zyx
+
+    movementDirNormalized := rl.Vector3Normalize(movementDirection)
+    cosLeft := rl.Vector3DotProduct(movementDirNormalized, leftSlidingDir)
+    cosRight := rl.Vector3DotProduct(movementDirNormalized, rightSlidingDir)
+    if cosLeft - cosRight > rl.EPSILON
+    {
+        return leftSlidingDir
+    }
+    else if cosRight - cosLeft > rl.EPSILON
+    {
+        return rightSlidingDir
+    }
+
+    return movementDirection
+}
+
 Force :: struct {
     vector: rl.Vector3,
     canBeRedirected: bool,
 }
 
+ForceSource :: enum { InputForward, InputSideways, Gravity } 
 
 
 // bool CheckCollisionBoxes(BoundingBox box1, BoundingBox box2)
@@ -327,6 +379,11 @@ main :: proc() {
     colliders[2] = position_bounding_box(playerBb, rl.Vector3{0.0, 4.0, 0.0})
     colliders[3] = position_bounding_box(playerBb, rl.Vector3{0.0, 2.0, 2.0})
 
+    playerForces: [ForceSource]Force
+    playerForces[.InputForward] = Force { rl.Vector3(0), true }
+    playerForces[.InputSideways] = Force { rl.Vector3(0), true }
+    playerForces[.Gravity] = Force { rl.Vector3(0), false }
+
     keysPickedUp := 0
 
     accumulator :f32= 0.0
@@ -340,12 +397,45 @@ main :: proc() {
         for accumulator >= DT {
             previousState = currentState
 
-            update_player_transform(&currentState.playerTransform, DT)
-            xbb := position_bounding_box(playerBb, currentState.playerTransform.position, 2.0)
-            ok, grounded  := player_position_valid(xbb, colliders[:])
-            if !ok {
-                currentState = previousState
-                currentState.playerTransform.grounded = grounded
+            // update forces based on input
+            playerForces[.InputForward] = get_forward_input_force(&previousState.playerTransform)
+            playerForces[.InputSideways] = get_sideways_input_force(&previousState.playerTransform)
+            //playerForces[.Gravity] = get_gravity_force()
+
+            // foreach force, update transform and check collision
+            for force in playerForces
+            {
+                forceBeforeState := currentState
+
+                currentState.playerTransform.position += force.vector * DT
+                xbb := position_bounding_box(playerBb, currentState.playerTransform.position, 2.0)
+                collidedBox, collision := TryGetCollidingBox(xbb, colliders[:])
+                if collision
+                {
+                    currentState = forceBeforeState
+
+                    if force.canBeRedirected
+                    {
+                        redirected := GetWallSlidingDirection(xbb, collidedBox, force.vector)
+
+                        currentState.playerTransform.position += redirected * SPEED * DT
+                        playerBbAfterRedirect := position_bounding_box(playerBb, currentState.playerTransform.position, 2.0)
+
+                        rBox, rCollision := TryGetCollidingBox(playerBbAfterRedirect, colliders[:])
+                        if rCollision {
+                            fmt.printfln("redirected: %f, %f, %f", redirected.x, redirected.y, redirected.z)
+                            currentState = forceBeforeState
+                        }
+                    }
+                }
+            }
+
+            // Rotation
+            mouseDelta := rl.GetMouseDelta()
+            if (abs(mouseDelta.x) > rl.EPSILON) {
+                rotationAmount := -mouseDelta.x * SENSITIVITY * DT
+                currentState.playerTransform.rotation += rotationAmount
+                //rl.CameraYaw(&camera, rotationAmount, true) 
             }
 
             accumulator -= DT
