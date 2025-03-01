@@ -6,7 +6,7 @@ import "core:strings"
 import "core:math"
 
 FPS :: 60 // Frames per second
-TPS :: 20 // Simulation tics per seconds
+TPS :: 30 // Simulation tics per seconds
 DT :: 1.0 / TPS // Delta time for the simulation
 
 LEVEL_WIDTH :: 10
@@ -274,9 +274,92 @@ GetNormalOfCollidedFace :: proc(box1, box2: rl.BoundingBox) -> rl.Vector3
     return rl.Vector3{0, 1 if positiveY else -1, 0}
 }
 
+Interval :: struct {
+    min: f32,
+    max: f32,
+}
+
+IntervalOverlap :: proc(first, second: Interval) -> (overlap: f32, orientation: bool)
+{
+    firstIsToTheLeft := first.min < second.min
+
+    separateLength := (first.max - first.min) + (second.max - second.min)
+    overlappedLength := second.max - first.min if firstIsToTheLeft else first.max - second.min
+
+    return separateLength - overlappedLength, firstIsToTheLeft
+}
+
+// When we collide at a corner, due to the discrete nature of the simulation
+// we can overshoot and arrive at a situation where a different normal than we want is calculated.
+// When this happens we do another check to see if the normal makes sense.
+// This values is set to the maximum penetration amount that can happen in a single tick.
+NORMAL_CONFIDENCE_TRESHOLD :: SPEED * DT
+
+GetNormalOfCollidedFace2 :: proc(box1, box2: rl.BoundingBox, movementDirection: rl.Vector3) -> rl.Vector3
+{
+    xOverlap, xOrientation := IntervalOverlap(Interval{box1.min.x, box1.max.x}, Interval{box2.min.x, box2.max.x})
+    yOverlap, yOrientation := IntervalOverlap(Interval{box1.min.y, box1.max.y}, Interval{box2.min.y, box2.max.y})
+    zOverlap, zOrientation := IntervalOverlap(Interval{box1.min.z, box1.max.z}, Interval{box2.min.z, box2.max.z})
+
+    xNormal := rl.Vector3{-1 if xOrientation else 1, 0, 0}
+    yNormal := rl.Vector3{0, -1 if yOrientation else 1, 0}
+    zNormal := rl.Vector3{0, 0, -1 if zOrientation else 1}
+
+    if xOverlap < yOverlap && xOverlap < zOverlap 
+    {
+        secondSmallest := yOverlap if yOverlap < zOverlap else zOverlap
+        penetrationDifference := secondSmallest - xOverlap
+        if penetrationDifference < NORMAL_CONFIDENCE_TRESHOLD
+        {
+            otherNormal := yNormal if yOverlap < zOverlap else zNormal
+
+            movementDirNormalized := rl.Vector3Normalize(movementDirection)
+            xCos := rl.Vector3DotProduct(movementDirNormalized, xNormal)
+            otherCos := rl.Vector3DotProduct(movementDirNormalized, otherNormal)
+
+            return xNormal if xCos < otherCos else otherNormal
+        }
+
+        return xNormal
+    }
+
+    if zOverlap < yOverlap && zOverlap < xOverlap
+    {
+        secondSmallest := yOverlap if yOverlap < xOverlap else xOverlap
+        penetrationDifference := secondSmallest - zOverlap
+        if penetrationDifference < NORMAL_CONFIDENCE_TRESHOLD
+        {
+            otherNormal := yNormal if yOverlap < xOverlap else xNormal
+
+            movementDirNormalized := rl.Vector3Normalize(movementDirection)
+            zCos := rl.Vector3DotProduct(movementDirNormalized, zNormal)
+            otherCos := rl.Vector3DotProduct(movementDirNormalized, otherNormal)
+
+            return zNormal if zCos < otherCos else otherNormal
+        }
+
+        return zNormal
+    }
+
+    secondSmallest := zOverlap if zOverlap < xOverlap else xOverlap
+    penetrationDifference := secondSmallest - yOverlap
+    if penetrationDifference < NORMAL_CONFIDENCE_TRESHOLD
+    {
+        otherNormal := zNormal if zOverlap < xOverlap else xNormal
+
+        movementDirNormalized := rl.Vector3Normalize(movementDirection)
+        yCos := rl.Vector3DotProduct(movementDirNormalized, yNormal)
+        otherCos := rl.Vector3DotProduct(movementDirNormalized, otherNormal)
+
+        return yNormal if yCos < otherCos else otherNormal
+    }
+
+    return yNormal
+}
+
 GetWallSlidingDirection :: proc(playerBox, collisioxBox: rl.BoundingBox, movementDirection: rl.Vector3) -> rl.Vector3
 {
-    collisionNormal := GetNormalOfCollidedFace(playerBox, collisioxBox)
+    collisionNormal := GetNormalOfCollidedFace2(playerBox, collisioxBox, movementDirection)
     leftSlidingDir := collisionNormal.zyx
     rightSlidingDir := -collisionNormal.zyx
 
@@ -302,20 +385,6 @@ Force :: struct {
 
 ForceSource :: enum { InputForward, InputSideways, Gravity } 
 
-
-// bool CheckCollisionBoxes(BoundingBox box1, BoundingBox box2)
-// {
-//     bool collision = true;
-//
-//     if ((box1.max.x >= box2.min.x) && (box1.min.x <= box2.max.x))
-//     {
-//         if ((box1.max.y < box2.min.y) || (box1.min.y > box2.max.y)) collision = false;
-//         if ((box1.max.z < box2.min.z) || (box1.min.z > box2.max.z)) collision = false;
-//     }
-//     else collision = false;
-//
-//     return collision;
-// }
 
 main :: proc() {
     rl.InitWindow(800, 450, "raylib [core] example - basic window")
@@ -397,10 +466,11 @@ main :: proc() {
         for accumulator >= DT {
             previousState = currentState
 
+            // --- this should be somewhere else so as not to pollute the update loop code
             // update forces based on input
             playerForces[.InputForward] = get_forward_input_force(&previousState.playerTransform)
             playerForces[.InputSideways] = get_sideways_input_force(&previousState.playerTransform)
-            //playerForces[.Gravity] = get_gravity_force()
+            playerForces[.Gravity] = get_gravity_force()
 
             // foreach force, update transform and check collision
             for force in playerForces
@@ -437,6 +507,7 @@ main :: proc() {
                 currentState.playerTransform.rotation += rotationAmount
                 //rl.CameraYaw(&camera, rotationAmount, true) 
             }
+            // --- this should be somewhere else so as not to pollute the update loop code
 
             accumulator -= DT
         }
