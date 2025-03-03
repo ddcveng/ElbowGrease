@@ -70,7 +70,8 @@ PlayerTransform :: struct {
     position: rl.Vector3, // implicitly pivot.center
     rotation: f32, // This is currenlty in degreees, since the rendering code takes it in degrees...
     // most of the calculations require this to be radians though so it kinda sucks
-    grounded: bool
+    grounded: bool,
+    jumpTimer: f32
 }
 
 // Distance should only change when we would intersect a wall. IN this case zoom the camera in a little to avoid it.
@@ -94,7 +95,7 @@ interpolate_states :: proc(s0: ^GameState, s1: ^GameState, alpha: f32) -> GameSt
         + s1.playerTransform.position * alpha
     newPlayerRotation := s0.playerTransform.rotation * (1 - alpha)\
         + s1.playerTransform.rotation * alpha
-    newPlayerTransform := PlayerTransform {newPlayerPos, newPlayerRotation, s0.playerTransform.grounded}
+    newPlayerTransform := PlayerTransform {newPlayerPos, newPlayerRotation, s0.playerTransform.grounded, s0.playerTransform.jumpTimer}
 
     newCameraDist := s0.cameraData.distance * (1 - alpha)\
         + s1.cameraData.distance * alpha
@@ -206,7 +207,7 @@ update_player_transform :: proc(playerTransform: ^PlayerTransform, dt: f32) {
 
 get_initial_game_state :: proc() -> GameState
 {
-    playerTransform := PlayerTransform {position=PLAYER_INITIAL_POSITION, rotation=CAMERA_INITIAL_ROTATION, grounded=false}
+    playerTransform := PlayerTransform {position=PLAYER_INITIAL_POSITION, rotation=CAMERA_INITIAL_ROTATION, grounded=false, jumpTimer=0.0}
     cameraData := PlayerFollowingCamera { distance=CAMERA_DISTANCE, rotation=CAMERA_INITIAL_ROTATION }
 
     return GameState {playerTransform, cameraData}
@@ -359,9 +360,86 @@ Force :: struct {
 
 ForceSource :: enum { InputForward, InputSideways, Gravity } 
 
+MoveAndSlide :: proc(originalState: GameState, force: rl.Vector3, playerBoundingBox: rl.BoundingBox, colliders: []rl.BoundingBox) -> GameState
+{
+    newState := originalState
+    newState.playerTransform.position += force * DT
+
+    playerBbAfterMove := position_bounding_box(playerBoundingBox, newState.playerTransform.position, 2.0)
+    collidedBox, collision := TryGetCollidingBox(playerBbAfterMove, colliders)
+    if collision
+    {
+        newState = originalState
+        redirected := GetWallSlidingDirection(playerBbAfterMove, collidedBox, force)
+
+        newState.playerTransform.position += redirected * SPEED * DT
+        playerBbAfterRedirect := position_bounding_box(playerBoundingBox, newState.playerTransform.position, 2.0)
+
+        rBox, rCollision := TryGetCollidingBox(playerBbAfterRedirect, colliders)
+        if rCollision {
+            fmt.printfln("redirected: %f, %f, %f", redirected.x, redirected.y, redirected.z)
+            return originalState
+        }
+    }
+
+    return newState
+}
+
+JUMP_HEIGHT :: 5.0
+JUMP_DURATION_SECONDS :: 0.3
+JUMP_SPEED :: JUMP_HEIGHT / JUMP_DURATION_SECONDS
+ApplyVerticalMovement :: proc(originalState: GameState, playerBoundingBox: rl.BoundingBox, colliders: []rl.BoundingBox) -> GameState
+{
+    // if any jump force remains, decay it and apply it
+    //      if jump causes collision, stop the jump force at once
+    jumpTimer := originalState.playerTransform.jumpTimer
+    if jumpTimer > rl.EPSILON {
+        jumpDt := min(jumpTimer, DT) 
+
+        newState := originalState
+        newState.playerTransform.position += rl.Vector3{0, 1, 0} * JUMP_SPEED * jumpDt
+
+        playerBbAfterMove := position_bounding_box(playerBoundingBox, newState.playerTransform.position, 2.0)
+        collidedBox, collision := TryGetCollidingBox(playerBbAfterMove, colliders)
+        if collision {
+            collidedState := originalState
+            collidedState.playerTransform.jumpTimer = 0
+
+            return collidedState
+        }
+
+        newState.playerTransform.jumpTimer -= DT // I don't care the last iteration will make it negative
+        return newState
+    }
+    
+    // always to to apply gravity and if we collide with something, we know we are grounded.
+    // if grounded, check for jump inputs
+    gravityPositionDelta := rl.Vector3{0, -1, 0} * GRAVITY * DT
+    newState := originalState
+    newState.playerTransform.position += gravityPositionDelta
+
+    playerBbAfterGravity := position_bounding_box(playerBoundingBox, newState.playerTransform.position, 2.0)
+    collidedBox, collision := TryGetCollidingBox(playerBbAfterGravity, colliders)
+    if collision {
+        groundedState := originalState
+
+        if rl.IsKeyPressed(rl.KeyboardKey.SPACE) {
+            startJumpState := groundedState
+            startJumpState.playerTransform.jumpTimer = JUMP_DURATION_SECONDS
+            //startJumpState.playerTransform.grounded = false
+
+            return startJumpState
+        }
+
+        return groundedState
+    }
+
+    return newState
+}
+
 
 main :: proc() {
-    rl.InitWindow(800, 450, "raylib [core] example - basic window")
+    rl.InitWindow(1600, 900, "raylib [core] example - basic window")
 
     rl.DisableCursor()
     rl.SetTargetFPS(FPS)
@@ -373,18 +451,6 @@ main :: proc() {
 
     //fmt.printfln("player pos: %f, %f, %f", playerPosition.x, playerPosition.y, playerPosition.z)
     fmt.printfln("camera pos: %f, %f, %f", cameraInitialPosition.x, cameraInitialPosition.y, cameraInitialPosition.z)
-    
-    // for row, rowInx in LEVEL {
-    //     for col, colInx in row {
-    //         if (col == u8(LevelSymbol.Spawn)) {
-    //             cameraX := LEVEL_POSITION_X_START + f32(colInx) * TILE_SIZE
-    //             cameraZ := LEVEL_POSITION_Z_START + f32(rowInx) * TILE_SIZE
-    //             cameraInitialPosition = { cameraX, 2.0, cameraZ }
-    //
-    //             break;
-    //         }
-    //     }
-    // }
 
     cameraMode := rl.CameraMode.THIRD_PERSON
     camera := rl.Camera3D { 
@@ -440,39 +506,47 @@ main :: proc() {
         for accumulator >= DT {
             previousState = currentState
 
+            currentState = ApplyVerticalMovement(previousState, playerBb, colliders[:])
+
+            forwardForce := get_forward_input_force(&previousState.playerTransform)
+            currentState = MoveAndSlide(currentState, forwardForce.vector, playerBb, colliders[:])
+
+            sidewaysForce := get_sideways_input_force(&previousState.playerTransform)
+            currentState = MoveAndSlide(currentState, sidewaysForce.vector, playerBb, colliders[:])
+
             // --- this should be somewhere else so as not to pollute the update loop code
             // update forces based on input
-            playerForces[.InputForward] = get_forward_input_force(&previousState.playerTransform)
-            playerForces[.InputSideways] = get_sideways_input_force(&previousState.playerTransform)
-            playerForces[.Gravity] = get_gravity_force()
-
-            // foreach force, update transform and check collision
-            for force in playerForces
-            {
-                forceBeforeState := currentState
-
-                currentState.playerTransform.position += force.vector * DT
-                xbb := position_bounding_box(playerBb, currentState.playerTransform.position, 2.0)
-                collidedBox, collision := TryGetCollidingBox(xbb, colliders[:])
-                if collision
-                {
-                    currentState = forceBeforeState
-
-                    if force.canBeRedirected
-                    {
-                        redirected := GetWallSlidingDirection(xbb, collidedBox, force.vector)
-
-                        currentState.playerTransform.position += redirected * SPEED * DT
-                        playerBbAfterRedirect := position_bounding_box(playerBb, currentState.playerTransform.position, 2.0)
-
-                        rBox, rCollision := TryGetCollidingBox(playerBbAfterRedirect, colliders[:])
-                        if rCollision {
-                            fmt.printfln("redirected: %f, %f, %f", redirected.x, redirected.y, redirected.z)
-                            currentState = forceBeforeState
-                        }
-                    }
-                }
-            }
+            // playerForces[.InputForward] = get_forward_input_force(&previousState.playerTransform)
+            // playerForces[.InputSideways] = get_sideways_input_force(&previousState.playerTransform)
+            // playerForces[.Gravity] = get_gravity_force()
+            //
+            // // foreach force, update transform and check collision
+            // for force in playerForces
+            // {
+            //     forceBeforeState := currentState
+            //
+            //     currentState.playerTransform.position += force.vector * DT
+            //     xbb := position_bounding_box(playerBb, currentState.playerTransform.position, 2.0)
+            //     collidedBox, collision := TryGetCollidingBox(xbb, colliders[:])
+            //     if collision
+            //     {
+            //         currentState = forceBeforeState
+            //
+            //         if force.canBeRedirected
+            //         {
+            //             redirected := GetWallSlidingDirection(xbb, collidedBox, force.vector)
+            //
+            //             currentState.playerTransform.position += redirected * SPEED * DT
+            //             playerBbAfterRedirect := position_bounding_box(playerBb, currentState.playerTransform.position, 2.0)
+            //
+            //             rBox, rCollision := TryGetCollidingBox(playerBbAfterRedirect, colliders[:])
+            //             if rCollision {
+            //                 fmt.printfln("redirected: %f, %f, %f", redirected.x, redirected.y, redirected.z)
+            //                 currentState = forceBeforeState
+            //             }
+            //         }
+            //     }
+            // }
 
             // Rotation
             mouseDelta := rl.GetMouseDelta()
