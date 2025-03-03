@@ -248,32 +248,6 @@ TryGetCollidingBox :: proc(playerBb: rl.BoundingBox, colliders: []rl.BoundingBox
     return rl.BoundingBox{}, false
 }
 
-// This doesn't work in the literal edge case when the intersection is just on the edge
-// if the boxes are not the same size. The relative vector will intersect the wrong face and we will get stuck.
-// TODO: I am not sure how to fix this.
-GetNormalOfCollidedFace :: proc(box1, box2: rl.BoundingBox) -> rl.Vector3
-{
-    box1Center := (box1.max - box1.min) / 2 + box1.min
-    box2Center := (box2.max - box2.min) / 2 + box2.min
-    relativeVector := rl.Vector3Normalize(box1Center - box2Center)
-    xAbs := abs(relativeVector.x)
-    yAbs := abs(relativeVector.y)
-    zAbs := abs(relativeVector.z)
-
-    if zAbs > xAbs && zAbs > yAbs {
-        positiveZ := relativeVector.z > 0
-        return rl.Vector3{0, 0, 1 if positiveZ else -1}
-    }
-
-    if xAbs > yAbs && xAbs > zAbs {
-        positiveX := relativeVector.x > 0
-        return rl.Vector3{1 if positiveX else -1, 0, 0}
-    }
-
-    positiveY := relativeVector.y > 0
-    return rl.Vector3{0, 1 if positiveY else -1, 0}
-}
-
 Interval :: struct {
     min: f32,
     max: f32,
@@ -295,7 +269,7 @@ IntervalOverlap :: proc(first, second: Interval) -> (overlap: f32, orientation: 
 // This values is set to the maximum penetration amount that can happen in a single tick.
 NORMAL_CONFIDENCE_TRESHOLD :: SPEED * DT
 
-GetNormalOfCollidedFace2 :: proc(box1, box2: rl.BoundingBox, movementDirection: rl.Vector3) -> rl.Vector3
+GetNormalOfCollidedFace :: proc(box1, box2: rl.BoundingBox, movementDirection: rl.Vector3) -> rl.Vector3
 {
     xOverlap, xOrientation := IntervalOverlap(Interval{box1.min.x, box1.max.x}, Interval{box2.min.x, box2.max.x})
     yOverlap, yOrientation := IntervalOverlap(Interval{box1.min.y, box1.max.y}, Interval{box2.min.y, box2.max.y})
@@ -359,7 +333,7 @@ GetNormalOfCollidedFace2 :: proc(box1, box2: rl.BoundingBox, movementDirection: 
 
 GetWallSlidingDirection :: proc(playerBox, collisioxBox: rl.BoundingBox, movementDirection: rl.Vector3) -> rl.Vector3
 {
-    collisionNormal := GetNormalOfCollidedFace2(playerBox, collisioxBox, movementDirection)
+    collisionNormal := GetNormalOfCollidedFace(playerBox, collisioxBox, movementDirection)
     leftSlidingDir := collisionNormal.zyx
     rightSlidingDir := -collisionNormal.zyx
 
