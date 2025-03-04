@@ -70,7 +70,6 @@ PlayerTransform :: struct {
     position: rl.Vector3, // implicitly pivot.center
     rotation: f32, // This is currenlty in degreees, since the rendering code takes it in degrees...
     // most of the calculations require this to be radians though so it kinda sucks
-    grounded: bool,
     jumpTimer: f32
 }
 
@@ -95,7 +94,7 @@ interpolate_states :: proc(s0: ^GameState, s1: ^GameState, alpha: f32) -> GameSt
         + s1.playerTransform.position * alpha
     newPlayerRotation := s0.playerTransform.rotation * (1 - alpha)\
         + s1.playerTransform.rotation * alpha
-    newPlayerTransform := PlayerTransform {newPlayerPos, newPlayerRotation, s0.playerTransform.grounded, s0.playerTransform.jumpTimer}
+    newPlayerTransform := PlayerTransform {newPlayerPos, newPlayerRotation, s0.playerTransform.jumpTimer}
 
     newCameraDist := s0.cameraData.distance * (1 - alpha)\
         + s1.cameraData.distance * alpha
@@ -176,38 +175,9 @@ get_gravity_force :: proc() -> Force
     return Force {rl.Vector3{0, -GRAVITY, 0}, false}
 } 
 
-update_player_transform :: proc(playerTransform: ^PlayerTransform, dt: f32) {
-    // Position
-    movement_direction := get_movement_direction_from_input()
-
-    player_forward := get_player_forward(playerTransform)
-    player_right := rl.Vector2Rotate(player_forward, rl.PI/2.0)
-
-    movement_direction_player_space := movement_direction.x * player_forward\
-        + movement_direction.y * player_right
-
-    movement_delta := movement_direction_player_space * SPEED * dt
-    position_delta := rl.Vector3{movement_delta.x, 0.0, movement_delta.y}
-
-    if !playerTransform.grounded {
-        gravity_delta := rl.Vector3{0, -1, 0} * GRAVITY * dt
-        position_delta += gravity_delta
-    }
-
-    playerTransform.position += position_delta
-
-    // Rotation
-    mouseDelta := rl.GetMouseDelta()
-    if (abs(mouseDelta.x) > rl.EPSILON) {
-        rotationAmount := -mouseDelta.x * SENSITIVITY * dt
-        playerTransform.rotation += rotationAmount
-        //rl.CameraYaw(&camera, rotationAmount, true) 
-    }
-}
-
 get_initial_game_state :: proc() -> GameState
 {
-    playerTransform := PlayerTransform {position=PLAYER_INITIAL_POSITION, rotation=CAMERA_INITIAL_ROTATION, grounded=false, jumpTimer=0.0}
+    playerTransform := PlayerTransform {position=PLAYER_INITIAL_POSITION, rotation=CAMERA_INITIAL_ROTATION, jumpTimer=0.0}
     cameraData := PlayerFollowingCamera { distance=CAMERA_DISTANCE, rotation=CAMERA_INITIAL_ROTATION }
 
     return GameState {playerTransform, cameraData}
@@ -426,7 +396,6 @@ ApplyVerticalMovement :: proc(originalState: GameState, playerBoundingBox: rl.Bo
         if rl.IsKeyPressed(rl.KeyboardKey.SPACE) {
             startJumpState := groundedState
             startJumpState.playerTransform.jumpTimer = JUMP_DURATION_SECONDS
-            //startJumpState.playerTransform.grounded = false
 
             return startJumpState
         }
@@ -488,11 +457,6 @@ main :: proc() {
     colliders[2] = position_bounding_box(playerBb, rl.Vector3{0.0, 4.0, 0.0})
     colliders[3] = position_bounding_box(playerBb, rl.Vector3{0.0, 2.0, 2.0})
 
-    playerForces: [ForceSource]Force
-    playerForces[.InputForward] = Force { rl.Vector3(0), true }
-    playerForces[.InputSideways] = Force { rl.Vector3(0), true }
-    playerForces[.Gravity] = Force { rl.Vector3(0), false }
-
     keysPickedUp := 0
 
     accumulator :f32= 0.0
@@ -500,6 +464,10 @@ main :: proc() {
     currentState := initialState
 
     gameloop: for !rl.WindowShouldClose() {
+
+        // 1. collect events
+        // 2. simulate the tick, with the events as parameters
+        // 3. render the scene 
         frameTime := rl.GetFrameTime()
 
         accumulator += frameTime
@@ -514,40 +482,6 @@ main :: proc() {
             sidewaysForce := get_sideways_input_force(&previousState.playerTransform)
             currentState = MoveAndSlide(currentState, sidewaysForce.vector, playerBb, colliders[:])
 
-            // --- this should be somewhere else so as not to pollute the update loop code
-            // update forces based on input
-            // playerForces[.InputForward] = get_forward_input_force(&previousState.playerTransform)
-            // playerForces[.InputSideways] = get_sideways_input_force(&previousState.playerTransform)
-            // playerForces[.Gravity] = get_gravity_force()
-            //
-            // // foreach force, update transform and check collision
-            // for force in playerForces
-            // {
-            //     forceBeforeState := currentState
-            //
-            //     currentState.playerTransform.position += force.vector * DT
-            //     xbb := position_bounding_box(playerBb, currentState.playerTransform.position, 2.0)
-            //     collidedBox, collision := TryGetCollidingBox(xbb, colliders[:])
-            //     if collision
-            //     {
-            //         currentState = forceBeforeState
-            //
-            //         if force.canBeRedirected
-            //         {
-            //             redirected := GetWallSlidingDirection(xbb, collidedBox, force.vector)
-            //
-            //             currentState.playerTransform.position += redirected * SPEED * DT
-            //             playerBbAfterRedirect := position_bounding_box(playerBb, currentState.playerTransform.position, 2.0)
-            //
-            //             rBox, rCollision := TryGetCollidingBox(playerBbAfterRedirect, colliders[:])
-            //             if rCollision {
-            //                 fmt.printfln("redirected: %f, %f, %f", redirected.x, redirected.y, redirected.z)
-            //                 currentState = forceBeforeState
-            //             }
-            //         }
-            //     }
-            // }
-
             // Rotation
             mouseDelta := rl.GetMouseDelta()
             if (abs(mouseDelta.x) > rl.EPSILON) {
@@ -555,7 +489,6 @@ main :: proc() {
                 currentState.playerTransform.rotation += rotationAmount
                 //rl.CameraYaw(&camera, rotationAmount, true) 
             }
-            // --- this should be somewhere else so as not to pollute the update loop code
 
             accumulator -= DT
         }
