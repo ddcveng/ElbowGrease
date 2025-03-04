@@ -17,29 +17,6 @@ TILE_SIZE :: 3.0
 LEVEL_POSITION_X_START :: -LEVEL_WIDTH * TILE_SIZE / 2.0
 LEVEL_POSITION_Z_START :: -LEVEL_HEIGHT * TILE_SIZE / 2.0
 
-KEYS_NEEDED :: 3
-
-LevelSymbol :: enum u8 {
-    Void = ' ',
-    Spawn = 'S',
-    Wall = 'x',
-    Key = 'k',
-    Goal = 'G',
-}
-
-LEVEL :: [LEVEL_WIDTH][LEVEL_HEIGHT]u8 {
-    {' ','x','x','x','x', 'x', 'x', 'x', 'x', ' '},
-    {'x','k',' ','x',' ', ' ', ' ', ' ', ' ', 'x'},
-    {'x','x',' ','x','k', 'x', ' ', 'x', ' ', 'x'},
-    {'x','x',' ','x','x', 'x', ' ', 'x', 'x', 'x'},
-    {'x',' ',' ',' ','k', 'x', ' ', 'x', ' ', 'x'},
-    {'x',' ',' ','x',' ', ' ', ' ', 'x', ' ', 'x'},
-    {'x',' ','x',' ','x', ' ', 'x', ' ', ' ', 'x'},
-    {'x',' ','x',' ',' ', ' ', 'x', ' ', ' ', 'x'},
-    {'x','S','x',' ',' ', ' ', ' ', ' ', 'G', 'x'},
-    {' ','x','x','x','x', 'x', 'x', 'x', 'x', ' '},
-}
-
 PLAYER_INITIAL_POSITION :: rl.Vector3{0.0, 2.0, 0.0}
 CAMERA_DISTANCE :: f32(6)
 CAMERA_INITIAL_ROTATION :: f32(0)
@@ -64,6 +41,16 @@ adjust_y_pos :: proc(y_pos: f32, scale: f32, pivot := Pivot.center) -> f32 {
     }
 
     return y_pos
+}
+
+Rad :: distinct f32
+Deg :: distinct f32
+
+Player :: struct {
+    position: rl.Vector3, // implicitly pivot.center
+    rotation: Rad,
+    jumpTimer: f32,
+    model: rl.Model,
 }
 
 PlayerTransform :: struct {
@@ -457,8 +444,6 @@ main :: proc() {
     colliders[2] = position_bounding_box(playerBb, rl.Vector3{0.0, 4.0, 0.0})
     colliders[3] = position_bounding_box(playerBb, rl.Vector3{0.0, 2.0, 2.0})
 
-    keysPickedUp := 0
-
     accumulator :f32= 0.0
     previousState := initialState
     currentState := initialState
@@ -520,42 +505,6 @@ main :: proc() {
                 for collider in colliders {
                     rl.DrawBoundingBox(collider, rl.RED)
                 }
-                //             rl.DrawModel(cube, wallPosition, wallScale, rl.BLUE)
-
-                // for row, rowInx in varLevel {
-                //     for col, colInx in row {
-                //         positionX: f32 = LEVEL_POSITION_X_START + f32(colInx) * TILE_SIZE
-                //         positionZ: f32 = LEVEL_POSITION_Z_START + f32(rowInx) * TILE_SIZE
-                //
-                //         switch col {
-                //         case u8(LevelSymbol.Wall):
-                //             wallScale: f32 = TILE_SIZE
-                //             wallY := adjust_y_pos(0.0, wallScale, Pivot.bottom)
-                //
-                //             wallPosition := rl.Vector3{ positionX, wallY, positionZ }
-                //
-                //             rl.DrawModel(cube, wallPosition, wallScale, rl.BLUE)
-                //         case u8(LevelSymbol.Key):
-                //             keyScale: f32 = TILE_SIZE / 4.0
-                //             keyY := adjust_y_pos(0.0, keyScale, Pivot.bottom)
-                //             keyPosition := rl.Vector3{ positionX, keyY, positionZ }
-                //
-                //             rl.DrawModel(cube, keyPosition, keyScale, rl.GOLD)
-                //         case u8(LevelSymbol.Goal):
-                //             goalScale: f32 = TILE_SIZE / 2.0
-                //             goalY := adjust_y_pos(0.0, goalScale, Pivot.bottom)
-                //             goalPosition := rl.Vector3{ positionX, goalY, positionZ }
-                //
-                //             goalColor := keysPickedUp == KEYS_NEEDED ? rl.GREEN : rl.RED
-                //             rl.DrawModel(cube, goalPosition, goalScale, goalColor)
-                //         }
-                //         
-                //     }
-                // }
-                //
-                //rl.DrawModel(cube, rl.Vector3{ 0.0, 1.5, 0.0 }, 3.0, rl.BLUE)
-                //rl.DrawCube(rl.Vector3{ 0.0, 1.0, 0.0 }, 2.0, 2.0, 2.0, rl.BLUE)     // Draw a blue wall
-
             rl.EndMode3D()
 
             //debugMsg := fmt.tprintf("Keys: %i / %i", keysPickedUp, KEYS_NEEDED)
