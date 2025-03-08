@@ -1,4 +1,4 @@
-package example
+package mojsej
 
 import rl "vendor:raylib"
 import "core:fmt"
@@ -17,7 +17,7 @@ TILE_SIZE :: 3.0
 LEVEL_POSITION_X_START :: -LEVEL_WIDTH * TILE_SIZE / 2.0
 LEVEL_POSITION_Z_START :: -LEVEL_HEIGHT * TILE_SIZE / 2.0
 
-PLAYER_INITIAL_POSITION :: rl.Vector3{0.0, 2.0, 0.0}
+PLAYER_INITIAL_POSITION :: rl.Vector3{-3.0, 2.0, -3.0}
 CAMERA_DISTANCE :: f32(6)
 CAMERA_INITIAL_ROTATION :: f32(0)
 CAMERA_HEIGHT_DIFFERENCE :: f32(1.5)
@@ -43,8 +43,11 @@ adjust_y_pos :: proc(y_pos: f32, scale: f32, pivot := Pivot.center) -> f32 {
     return y_pos
 }
 
-Rad :: distinct f32
-Deg :: distinct f32
+// Consider adding "distinct" for more strict type checking.
+// Right now I feel like its too annoying.
+// - 4.3.2025
+Rad :: f32
+Deg :: f32
 
 Player :: struct {
     position: rl.Vector3, // implicitly pivot.center
@@ -55,7 +58,7 @@ Player :: struct {
 
 PlayerTransform :: struct {
     position: rl.Vector3, // implicitly pivot.center
-    rotation: f32, // This is currenlty in degreees, since the rendering code takes it in degrees...
+    rotation: Deg, // This is currenlty in degreees, since the rendering code takes it in degrees...
     // most of the calculations require this to be radians though so it kinda sucks
     jumpTimer: f32
 }
@@ -71,6 +74,7 @@ PlayerFollowingCamera :: struct {
 GameState :: struct {
     playerTransform: PlayerTransform,
     cameraData: PlayerFollowingCamera,
+    jumpQueued: bool,
 }
 
 // Hm.. keeping this up to date as the state grows will be tricky,
@@ -89,10 +93,10 @@ interpolate_states :: proc(s0: ^GameState, s1: ^GameState, alpha: f32) -> GameSt
         + s1.cameraData.rotation * alpha
     newCameraData := PlayerFollowingCamera {newCameraDist, newCameraRotation}
 
-    return GameState {newPlayerTransform, newCameraData}
+    return GameState {newPlayerTransform, newCameraData, s1.jumpQueued}
 }
 
-get_camera_position :: proc(playerTransform: ^PlayerTransform, cameraData: PlayerFollowingCamera) -> rl.Vector3 {
+get_camera_position :: proc(playerTransform: PlayerTransform, cameraData: PlayerFollowingCamera) -> rl.Vector3 {
     // direction projected to the XY plane.
     playerPosition := playerTransform.position
     playerFacingDirection := get_player_forward(playerTransform)
@@ -102,14 +106,14 @@ get_camera_position :: proc(playerTransform: ^PlayerTransform, cameraData: Playe
     return rl.Vector3{cameraXZ.x, playerPosition.y + CAMERA_HEIGHT_DIFFERENCE, cameraXZ.y}
 }
 
-get_player_forward :: proc(transform: ^PlayerTransform) -> rl.Vector2 {
+get_player_forward :: proc(transform: PlayerTransform) -> rl.Vector2 {
     start_direction := rl.Vector2 {1.0, 0.0}
     rotation_corrected := -transform.rotation * rl.DEG2RAD // Convert to radians and make the rotation clockwise
 
     return rl.Vector2Rotate(start_direction, rotation_corrected)
 }
 
-get_player_sideways :: proc(transform: ^PlayerTransform) -> rl.Vector2 {
+get_player_sideways :: proc(transform: PlayerTransform) -> rl.Vector2 {
     start_direction := rl.Vector2 {1.0, 0.0}
     rotation_corrected := -transform.rotation * rl.DEG2RAD // Convert to radians and make the rotation clockwise
 
@@ -139,7 +143,7 @@ GRAVITY :: 10.0
 SPEED :: 5.0
 SENSITIVITY :: 5.0
 
-get_forward_input_force :: proc(playerTransform: ^PlayerTransform) -> Force
+get_forward_input_force :: proc(playerTransform: PlayerTransform) -> Force
 {
     movementFromInput := get_movement_direction_from_input()
     forwardVector := get_player_forward(playerTransform)
@@ -148,7 +152,7 @@ get_forward_input_force :: proc(playerTransform: ^PlayerTransform) -> Force
     return Force { movementFromInput.x * SPEED * forward3d, true } 
 }
 
-get_sideways_input_force :: proc(playerTransform: ^PlayerTransform) -> Force
+get_sideways_input_force :: proc(playerTransform: PlayerTransform) -> Force
 {
     movementFromInput := get_movement_direction_from_input()
     sidewaysVector := get_player_sideways(playerTransform)
@@ -167,7 +171,7 @@ get_initial_game_state :: proc() -> GameState
     playerTransform := PlayerTransform {position=PLAYER_INITIAL_POSITION, rotation=CAMERA_INITIAL_ROTATION, jumpTimer=0.0}
     cameraData := PlayerFollowingCamera { distance=CAMERA_DISTANCE, rotation=CAMERA_INITIAL_ROTATION }
 
-    return GameState {playerTransform, cameraData}
+    return GameState {playerTransform, cameraData, false}
 }
 
 
@@ -317,17 +321,17 @@ Force :: struct {
 
 ForceSource :: enum { InputForward, InputSideways, Gravity } 
 
-MoveAndSlide :: proc(originalState: GameState, force: rl.Vector3, playerBoundingBox: rl.BoundingBox, colliders: []rl.BoundingBox) -> GameState
+MoveAndSlide :: proc(originalState: GameState, movementDirection: rl.Vector3, playerBoundingBox: rl.BoundingBox, colliders: []rl.BoundingBox) -> GameState
 {
     newState := originalState
-    newState.playerTransform.position += force * DT
+    newState.playerTransform.position += movementDirection * SPEED * DT
 
     playerBbAfterMove := position_bounding_box(playerBoundingBox, newState.playerTransform.position, 2.0)
     collidedBox, collision := TryGetCollidingBox(playerBbAfterMove, colliders)
     if collision
     {
         newState = originalState
-        redirected := GetWallSlidingDirection(playerBbAfterMove, collidedBox, force)
+        redirected := GetWallSlidingDirection(playerBbAfterMove, collidedBox, movementDirection)
 
         newState.playerTransform.position += redirected * SPEED * DT
         playerBbAfterRedirect := position_bounding_box(playerBoundingBox, newState.playerTransform.position, 2.0)
@@ -345,7 +349,7 @@ MoveAndSlide :: proc(originalState: GameState, force: rl.Vector3, playerBounding
 JUMP_HEIGHT :: 5.0
 JUMP_DURATION_SECONDS :: 0.3
 JUMP_SPEED :: JUMP_HEIGHT / JUMP_DURATION_SECONDS
-ApplyVerticalMovement :: proc(originalState: GameState, playerBoundingBox: rl.BoundingBox, colliders: []rl.BoundingBox) -> GameState
+ApplyVerticalMovement :: proc(originalState: GameState, actions: InputActions, playerBoundingBox: rl.BoundingBox, colliders: []rl.BoundingBox) -> GameState
 {
     // if any jump force remains, decay it and apply it
     //      if jump causes collision, stop the jump force at once
@@ -380,7 +384,7 @@ ApplyVerticalMovement :: proc(originalState: GameState, playerBoundingBox: rl.Bo
     if collision {
         groundedState := originalState
 
-        if rl.IsKeyPressed(rl.KeyboardKey.SPACE) {
+        if actions.jump {
             startJumpState := groundedState
             startJumpState.playerTransform.jumpTimer = JUMP_DURATION_SECONDS
 
@@ -393,6 +397,35 @@ ApplyVerticalMovement :: proc(originalState: GameState, playerBoundingBox: rl.Bo
     return newState
 }
 
+Update :: proc(previousState: GameState, actions: InputActions, playerBb: rl.BoundingBox, colliders: []rl.BoundingBox) -> GameState
+{
+    currentState := ApplyVerticalMovement(previousState, actions, playerBb, colliders[:])
+
+    move := actions.movement
+    if .Forward in move || .Backward in move {
+        direction :f32= 1 if .Forward in move else -1
+        forwardVector := get_player_forward(previousState.playerTransform)
+        forward3d := rl.Vector3 { forwardVector.x, 0, forwardVector.y } * direction
+
+        currentState = MoveAndSlide(currentState, forward3d, playerBb, colliders[:])
+    } 
+    if .Left in move || .Right in move {
+        direction :f32= 1 if .Right in move else -1
+        sidewaysVector := get_player_sideways(previousState.playerTransform)
+        sideways3d := rl.Vector3 { sidewaysVector.x, 0, sidewaysVector.y } * direction
+
+        currentState = MoveAndSlide(currentState, sideways3d, playerBb, colliders[:])
+    }
+
+    // Rotation
+    if (abs(actions.cameraRotation.x) > rl.EPSILON) {
+        rotationAmount := -actions.cameraRotation.x * SENSITIVITY * DT
+        currentState.playerTransform.rotation += rotationAmount
+    }
+
+    return currentState
+}
+
 
 main :: proc() {
     rl.InitWindow(1600, 900, "raylib [core] example - basic window")
@@ -403,7 +436,7 @@ main :: proc() {
 
     initialState := get_initial_game_state()
 
-    cameraInitialPosition := get_camera_position(&initialState.playerTransform, initialState.cameraData)
+    cameraInitialPosition := get_camera_position(initialState.playerTransform, initialState.cameraData)
 
     //fmt.printfln("player pos: %f, %f, %f", playerPosition.x, playerPosition.y, playerPosition.z)
     fmt.printfln("camera pos: %f, %f, %f", cameraInitialPosition.x, cameraInitialPosition.y, cameraInitialPosition.z)
@@ -418,6 +451,13 @@ main :: proc() {
     
     //cameraDir := rl.GetCameraForward(&camera)
     //fmt.printfln("camera dir: %f, %f, %f", cameraDir.x, cameraDir.y, cameraDir.z)
+
+    scene := rl.LoadModel("res/scenes/test.glb")
+    colliders := make([]rl.BoundingBox, scene.meshCount+1)
+    for mesh, inx in scene.meshes[:scene.meshCount] {
+        colliders[inx+1] = rl.GetMeshBoundingBox(mesh)
+    }
+    colliders[0] = rl.BoundingBox { rl.Vector3{-10, 0, -10}, rl.Vector3 {10, 0, 10} }
 
     lightingShader := rl.LoadShader("res/shaders/basic_lighting.vs", "res/shaders/basic_lighting.fs")
     
@@ -438,42 +478,35 @@ main :: proc() {
     cube.materials[0].shader = lightingShader
     cube.materials[0].maps[rl.MaterialMapIndex.ALBEDO].texture = texture
 
-    colliders: [4]rl.BoundingBox
-    colliders[0] = rl.BoundingBox { rl.Vector3{-5, 0, -5}, rl.Vector3 {5, 0, 5} }
-    colliders[1] = position_bounding_box(playerBb, rl.Vector3{2.0, 2.0, 0.0})
-    colliders[2] = position_bounding_box(playerBb, rl.Vector3{0.0, 4.0, 0.0})
-    colliders[3] = position_bounding_box(playerBb, rl.Vector3{0.0, 2.0, 2.0})
+    // colliders: [4]rl.BoundingBox
+    // colliders[0] = rl.BoundingBox { rl.Vector3{-5, 0, -5}, rl.Vector3 {5, 0, 5} }
+    // colliders[1] = position_bounding_box(playerBb, rl.Vector3{2.0, 2.0, 0.0})
+    // colliders[2] = position_bounding_box(playerBb, rl.Vector3{0.0, 4.0, 0.0})
+    // colliders[3] = position_bounding_box(playerBb, rl.Vector3{0.0, 2.0, 2.0})
 
     accumulator :f32= 0.0
     previousState := initialState
     currentState := initialState
 
     gameloop: for !rl.WindowShouldClose() {
-
-        // 1. collect events
-        // 2. simulate the tick, with the events as parameters
-        // 3. render the scene 
         frameTime := rl.GetFrameTime()
+        actions := PollActions()
+
+        // hmm, this seems a little sketchy
+        // I need this since the update is not called every frame. 
+        // This means we can miss the frame when we press jump and update and the jump feels clunky.
+        // This ensures every jump key pressed results in a jump
+        previousState = currentState
+        if actions.jump {
+            currentState.jumpQueued = true
+        }
+        actions.jump |= currentState.jumpQueued
 
         accumulator += frameTime
         for accumulator >= DT {
             previousState = currentState
-
-            currentState = ApplyVerticalMovement(previousState, playerBb, colliders[:])
-
-            forwardForce := get_forward_input_force(&previousState.playerTransform)
-            currentState = MoveAndSlide(currentState, forwardForce.vector, playerBb, colliders[:])
-
-            sidewaysForce := get_sideways_input_force(&previousState.playerTransform)
-            currentState = MoveAndSlide(currentState, sidewaysForce.vector, playerBb, colliders[:])
-
-            // Rotation
-            mouseDelta := rl.GetMouseDelta()
-            if (abs(mouseDelta.x) > rl.EPSILON) {
-                rotationAmount := -mouseDelta.x * SENSITIVITY * DT
-                currentState.playerTransform.rotation += rotationAmount
-                //rl.CameraYaw(&camera, rotationAmount, true) 
-            }
+            currentState = Update(previousState, actions, playerBb, colliders[:])
+            currentState.jumpQueued = false
 
             accumulator -= DT
         }
@@ -483,7 +516,7 @@ main :: proc() {
 
         /// From this point on, renderState should be used instead of current/prev state
 
-        camera.position = get_camera_position(&renderState.playerTransform, renderState.cameraData)
+        camera.position = get_camera_position(renderState.playerTransform, renderState.cameraData)
         camera.target = renderState.playerTransform.position
 
         rl.BeginDrawing()
@@ -491,13 +524,15 @@ main :: proc() {
         
             rl.BeginMode3D(camera)
 
-                rl.DrawPlane(rl.Vector3{ 0.0, 0.0, 0.0}, rl.Vector2{ 10, 10 }, rl.GREEN) // Draw ground
+                rl.DrawPlane(rl.Vector3{ 0.0, -3.0, 0.0}, rl.Vector2{ 20, 20 }, rl.GREEN) // Draw ground
 
                 // NOTE: this thing takes the rotation amount in degrees instead of radians -_-
                 rl.DrawModelEx(player, renderState.playerTransform.position, rl.Vector3{0.0, 1.0, 0.0}, renderState.playerTransform.rotation, 2.0, rl.GOLD)
-                rl.DrawModel(player, rl.Vector3{2.0, 2.0, 0.0}, 1.0, rl.RED)
-                rl.DrawModel(player, rl.Vector3{0.0, 4.0, 0.0}, 1.0, rl.GREEN)
-                rl.DrawModel(player, rl.Vector3{0.0, 2.0, 2.0}, 1.0, rl.BLUE)
+
+                rl.DrawModel(scene, rl.Vector3(0), 1.0, rl.WHITE)
+                // rl.DrawModel(player, rl.Vector3{2.0, 2.0, 0.0}, 1.0, rl.RED)
+                // rl.DrawModel(player, rl.Vector3{0.0, 4.0, 0.0}, 1.0, rl.GREEN)
+                // rl.DrawModel(player, rl.Vector3{0.0, 2.0, 2.0}, 1.0, rl.BLUE)
 
                 playerBbbw := position_bounding_box(playerBb, renderState.playerTransform.position, 2.0)
                 rl.DrawBoundingBox(playerBbbw, rl.RED)
@@ -507,6 +542,7 @@ main :: proc() {
                 }
             rl.EndMode3D()
 
+            rl.DrawFPS(50, 50)
             //debugMsg := fmt.tprintf("Keys: %i / %i", keysPickedUp, KEYS_NEEDED)
             //rl.DrawText(strings.clone_to_cstring(debugMsg), 10, 10, 20, rl.BLACK)
         rl.EndDrawing()
