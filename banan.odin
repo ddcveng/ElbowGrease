@@ -4,6 +4,8 @@ import rl "vendor:raylib"
 import "core:fmt"
 import "core:strings"
 import "core:math"
+import "core:math/linalg"
+import "core:slice"
 
 FPS :: 60 // Frames per second
 TPS :: 30 // Simulation tics per seconds
@@ -17,10 +19,12 @@ TILE_SIZE :: 3.0
 LEVEL_POSITION_X_START :: -LEVEL_WIDTH * TILE_SIZE / 2.0
 LEVEL_POSITION_Z_START :: -LEVEL_HEIGHT * TILE_SIZE / 2.0
 
-PLAYER_INITIAL_POSITION :: rl.Vector3{-3.0, 2.0, -3.0}
+PLAYER_INITIAL_POSITION :: rl.Vector3{-43.0, 2.0, -3.0}
 CAMERA_DISTANCE :: f32(6)
 CAMERA_INITIAL_ROTATION :: f32(0)
 CAMERA_HEIGHT_DIFFERENCE :: f32(1.5)
+
+Point3 :: [3]f32
 
 pos2LevelIndex :: proc(position: rl.Vector3) -> (int, int) {
     xInx := int(math.round((position.x - LEVEL_POSITION_X_START) / TILE_SIZE))
@@ -181,23 +185,6 @@ position_bounding_box :: proc(defaultBb: rl.BoundingBox, position: rl.Vector3, s
         scale * defaultBb.max + position }
 }
 
-get_bounding_box_collisions :: proc(box: rl.BoundingBox, colliders: []rl.BoundingBox) -> []rl.BoundingBox
-{
-    collided: [dynamic]rl.BoundingBox
-
-    for collider in colliders {
-        colliding := rl.CheckCollisionBoxes(box, collider)
-        if colliding {
-            append(&collided, collider)
-        }
-    }
-
-    return collided[:]
-}
-
-// figure out the face of the bb which we collided with
-// stop only the part of the vector which would take us into the collider, instead slide along the wall
-
 TryGetCollidingBox :: proc(playerBb: rl.BoundingBox, colliders: []rl.BoundingBox) -> (rl.BoundingBox, bool)
 {
     for collider in colliders {
@@ -208,6 +195,36 @@ TryGetCollidingBox :: proc(playerBb: rl.BoundingBox, colliders: []rl.BoundingBox
     }
 
     return rl.BoundingBox{}, false
+}
+
+TryGetCollidingTriangleNormal :: proc(playerPosition: Point3, triangles: [][3]Point3) -> (rl.Vector3, bool)
+{
+    for tri in triangles {
+        closestPoint := closest_point_on_triangle(playerPosition, tri.x, tri.y, tri.z)
+        distance := linalg.length(playerPosition - closestPoint)
+
+        if distance < 1.0 { // radius of player collider sphere
+            u := tri.y - tri.x
+            v := tri.z - tri.x
+            normal := linalg.normalize(linalg.cross(u, v))
+
+            return normal, true            
+        }
+    }
+
+    return {}, false
+}
+
+CheckAnyCollision :: proc(playerBb: rl.BoundingBox, colliders: []rl.BoundingBox, triangles: [][3]Point3) -> bool
+{
+    box, collision := TryGetCollidingBox(playerBb, colliders)
+    if collision {
+        return true
+    }
+
+    playerPosition := (playerBb.max - playerBb.min) / 2
+    n, triCollision := TryGetCollidingTriangleNormal(playerPosition, triangles)
+    return triCollision
 }
 
 Interval :: struct {
@@ -321,7 +338,7 @@ Force :: struct {
 
 ForceSource :: enum { InputForward, InputSideways, Gravity } 
 
-MoveAndSlide :: proc(originalState: GameState, movementDirection: rl.Vector3, playerBoundingBox: rl.BoundingBox, colliders: []rl.BoundingBox) -> GameState
+MoveAndSlide :: proc(originalState: GameState, movementDirection: rl.Vector3, playerBoundingBox: rl.BoundingBox, colliders: []rl.BoundingBox, triangles: [][3]Point3) -> GameState
 {
     newState := originalState
     newState.playerTransform.position += movementDirection * SPEED * DT
@@ -336,10 +353,32 @@ MoveAndSlide :: proc(originalState: GameState, movementDirection: rl.Vector3, pl
         newState.playerTransform.position += redirected * SPEED * DT
         playerBbAfterRedirect := position_bounding_box(playerBoundingBox, newState.playerTransform.position, 2.0)
 
-        rBox, rCollision := TryGetCollidingBox(playerBbAfterRedirect, colliders)
+        rCollision := CheckAnyCollision(playerBbAfterRedirect, colliders, triangles)
         if rCollision {
             fmt.printfln("redirected: %f, %f, %f", redirected.x, redirected.y, redirected.z)
             return originalState
+        }
+    }
+
+    // check collision with triangles 
+    // find the normal of the triangle 
+    triangleNormal, triCollision := TryGetCollidingTriangleNormal(newState.playerTransform.position, triangles)
+    if triCollision {
+        newState = originalState
+
+        directionDotNormal := linalg.dot(movementDirection, triangleNormal)
+        if directionDotNormal < 0.0 {
+            fmt.printfln("sliding along direction: %f, %f, %f", triangleNormal.x, triangleNormal.y, triangleNormal.z)
+            projectedDirection := movementDirection - triangleNormal * directionDotNormal
+
+            newState.playerTransform.position += projectedDirection * SPEED * DT
+            playerBbAfterSlide := position_bounding_box(playerBoundingBox, newState.playerTransform.position, 2.0)
+
+            slideCollision := CheckAnyCollision(playerBbAfterSlide, colliders, triangles)
+            if slideCollision {
+                fmt.printfln("slide failed in direction: %f, %f, %f", projectedDirection.x, projectedDirection.y, projectedDirection.z)
+                return originalState
+            }
         }
     }
 
@@ -349,7 +388,7 @@ MoveAndSlide :: proc(originalState: GameState, movementDirection: rl.Vector3, pl
 JUMP_HEIGHT :: 5.0
 JUMP_DURATION_SECONDS :: 0.3
 JUMP_SPEED :: JUMP_HEIGHT / JUMP_DURATION_SECONDS
-ApplyVerticalMovement :: proc(originalState: GameState, actions: InputActions, playerBoundingBox: rl.BoundingBox, colliders: []rl.BoundingBox) -> GameState
+ApplyVerticalMovement :: proc(originalState: GameState, actions: InputActions, playerBoundingBox: rl.BoundingBox, colliders: []rl.BoundingBox, triangles: [][3]Point3) -> GameState
 {
     // if any jump force remains, decay it and apply it
     //      if jump causes collision, stop the jump force at once
@@ -361,7 +400,7 @@ ApplyVerticalMovement :: proc(originalState: GameState, actions: InputActions, p
         newState.playerTransform.position += rl.Vector3{0, 1, 0} * JUMP_SPEED * jumpDt
 
         playerBbAfterMove := position_bounding_box(playerBoundingBox, newState.playerTransform.position, 2.0)
-        collidedBox, collision := TryGetCollidingBox(playerBbAfterMove, colliders)
+        collision := CheckAnyCollision(playerBbAfterMove, colliders, triangles)
         if collision {
             collidedState := originalState
             collidedState.playerTransform.jumpTimer = 0
@@ -380,7 +419,7 @@ ApplyVerticalMovement :: proc(originalState: GameState, actions: InputActions, p
     newState.playerTransform.position += gravityPositionDelta
 
     playerBbAfterGravity := position_bounding_box(playerBoundingBox, newState.playerTransform.position, 2.0)
-    collidedBox, collision := TryGetCollidingBox(playerBbAfterGravity, colliders)
+    collision := CheckAnyCollision(playerBbAfterGravity, colliders, triangles)
     if collision {
         groundedState := originalState
 
@@ -397,9 +436,9 @@ ApplyVerticalMovement :: proc(originalState: GameState, actions: InputActions, p
     return newState
 }
 
-Update :: proc(previousState: GameState, actions: InputActions, playerBb: rl.BoundingBox, colliders: []rl.BoundingBox) -> GameState
+Update :: proc(previousState: GameState, actions: InputActions, playerBb: rl.BoundingBox, colliders: []rl.BoundingBox, triangles: [][3]Point3) -> GameState
 {
-    currentState := ApplyVerticalMovement(previousState, actions, playerBb, colliders[:])
+    currentState := ApplyVerticalMovement(previousState, actions, playerBb, colliders, triangles)
 
     move := actions.movement
     if .Forward in move || .Backward in move {
@@ -407,14 +446,14 @@ Update :: proc(previousState: GameState, actions: InputActions, playerBb: rl.Bou
         forwardVector := get_player_forward(previousState.playerTransform)
         forward3d := rl.Vector3 { forwardVector.x, 0, forwardVector.y } * direction
 
-        currentState = MoveAndSlide(currentState, forward3d, playerBb, colliders[:])
+        currentState = MoveAndSlide(currentState, forward3d, playerBb, colliders, triangles)
     } 
     if .Left in move || .Right in move {
         direction :f32= 1 if .Right in move else -1
         sidewaysVector := get_player_sideways(previousState.playerTransform)
         sideways3d := rl.Vector3 { sidewaysVector.x, 0, sidewaysVector.y } * direction
 
-        currentState = MoveAndSlide(currentState, sideways3d, playerBb, colliders[:])
+        currentState = MoveAndSlide(currentState, sideways3d, playerBb, colliders, triangles)
     }
 
     // Rotation
@@ -452,12 +491,39 @@ main :: proc() {
     //cameraDir := rl.GetCameraForward(&camera)
     //fmt.printfln("camera dir: %f, %f, %f", cameraDir.x, cameraDir.y, cameraDir.z)
 
-    scene := rl.LoadModel("res/scenes/test.glb")
-    colliders := make([]rl.BoundingBox, scene.meshCount+1)
-    for mesh, inx in scene.meshes[:scene.meshCount] {
+    chair := rl.LoadModel("res/scenes/chair.glb")
+
+    // collisions calculated by bounding box (AABB)
+    axisAlignedScene := rl.LoadModel("res/scenes/ikeamaze.glb")
+    colliders := make([]rl.BoundingBox, axisAlignedScene.meshCount+1)
+    for mesh, inx in axisAlignedScene.meshes[:axisAlignedScene.meshCount] {
         colliders[inx+1] = rl.GetMeshBoundingBox(mesh)
     }
-    colliders[0] = rl.BoundingBox { rl.Vector3{-10, 0, -10}, rl.Vector3 {10, 0, 10} }
+    colliders[0] = rl.BoundingBox { rl.Vector3{-100, 0, -100}, rl.Vector3 {100, 0, 100} }
+
+    // collisions calculated by triangle intersection (these are rotated objects and stuff where the aabb is not good enough)
+    angledScene := rl.LoadModel("res/scenes/sceneAngled.glb")
+    angledMeshes := angledScene.meshes[:angledScene.meshCount]
+    //triangleCount := slice.reduce(angledMeshes, 0, proc(accumulator: int, mesh: rl.Mesh) -> int { return accumulator + int(mesh.triangleCount)})
+    //angledSceneTriangles := make([][3]Point3, triangleCount)
+    angledSceneTriangles: [dynamic][3]Point3
+    
+    for mesh in angledMeshes {
+        vertexComponents := mesh.vertices[:3 * mesh.vertexCount]
+        vertices: [dynamic]Point3
+
+        for i := 0; i < len(vertexComponents); i += 3 {
+            vertex := Point3{ vertexComponents[i], vertexComponents[i+1], vertexComponents[i+2] }
+            append(&vertices, vertex)
+        }
+
+
+        indices := mesh.indices[:3 * mesh.triangleCount]
+        for i := 0; i < len(indices); i += 3 {
+            triangle: [3]Point3 = {vertices[indices[i]], vertices[indices[i+1]], vertices[indices[i+2]]}
+            append(&angledSceneTriangles, triangle)
+        }
+    }
 
     lightingShader := rl.LoadShader("res/shaders/basic_lighting.vs", "res/shaders/basic_lighting.fs")
     
@@ -505,7 +571,7 @@ main :: proc() {
         accumulator += frameTime
         for accumulator >= DT {
             previousState = currentState
-            currentState = Update(previousState, actions, playerBb, colliders[:])
+            currentState = Update(previousState, actions, playerBb, colliders[:], angledSceneTriangles[:])
             currentState.jumpQueued = false
 
             accumulator -= DT
@@ -524,15 +590,14 @@ main :: proc() {
         
             rl.BeginMode3D(camera)
 
-                rl.DrawPlane(rl.Vector3{ 0.0, -3.0, 0.0}, rl.Vector2{ 20, 20 }, rl.GREEN) // Draw ground
+                rl.DrawPlane(rl.Vector3{ 0.0, 0.0, 0.0}, rl.Vector2{ 200, 200 }, rl.GREEN) // Draw ground
 
                 // NOTE: this thing takes the rotation amount in degrees instead of radians -_-
                 rl.DrawModelEx(player, renderState.playerTransform.position, rl.Vector3{0.0, 1.0, 0.0}, renderState.playerTransform.rotation, 2.0, rl.GOLD)
+                //rl.DrawModel(chair, renderState.playerTransform.position, 1.0, rl.WHITE)
 
-                rl.DrawModel(scene, rl.Vector3(0), 1.0, rl.WHITE)
-                // rl.DrawModel(player, rl.Vector3{2.0, 2.0, 0.0}, 1.0, rl.RED)
-                // rl.DrawModel(player, rl.Vector3{0.0, 4.0, 0.0}, 1.0, rl.GREEN)
-                // rl.DrawModel(player, rl.Vector3{0.0, 2.0, 2.0}, 1.0, rl.BLUE)
+                rl.DrawModel(axisAlignedScene, rl.Vector3(0), 1.0, rl.WHITE)
+                rl.DrawModel(angledScene, rl.Vector3(0), 1.0, rl.WHITE)
 
                 playerBbbw := position_bounding_box(playerBb, renderState.playerTransform.position, 2.0)
                 rl.DrawBoundingBox(playerBbbw, rl.RED)
