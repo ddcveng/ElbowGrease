@@ -1,4 +1,4 @@
-package mojsej
+package jamgame
 
 import "core:math/linalg"
 import rl "vendor:raylib"

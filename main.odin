@@ -1,4 +1,4 @@
-package mojsej
+package jamgame
 
 import rl "vendor:raylib"
 import "core:fmt"
@@ -100,15 +100,24 @@ interpolate_states :: proc(s0: ^GameState, s1: ^GameState, alpha: f32) -> GameSt
     return GameState {newPlayerTransform, newCameraData, s1.jumpQueued}
 }
 
-get_camera_position :: proc(playerTransform: PlayerTransform, cameraData: PlayerFollowingCamera) -> rl.Vector3 {
-    // direction projected to the XY plane.
-    playerPosition := playerTransform.position
+//first person camera
+setup_camera :: proc(camera: ^rl.Camera, playerTransform: PlayerTransform)
+{
     playerFacingDirection := get_player_forward(playerTransform)
-    rotatedDirection := rl.Vector2Rotate(playerFacingDirection, cameraData.rotation)
-    cameraXZ := playerPosition.xz - (cameraData.distance * rotatedDirection)
 
-    return rl.Vector3{cameraXZ.x, playerPosition.y + CAMERA_HEIGHT_DIFFERENCE, cameraXZ.y}
+    camera.position = playerTransform.position
+    camera.target = camera.position + rl.Vector3 {playerFacingDirection.x, 0.0, playerFacingDirection.y}
 }
+
+// get_camera_position :: proc(playerTransform: PlayerTransform, cameraData: PlayerFollowingCamera) -> rl.Vector3 {
+//     // direction projected to the XY plane.
+//     playerPosition := playerTransform.position
+//     playerFacingDirection := get_player_forward(playerTransform)
+//     rotatedDirection := rl.Vector2Rotate(playerFacingDirection, cameraData.rotation)
+//     cameraXZ := playerPosition.xz - (cameraData.distance * rotatedDirection)
+//
+//     return rl.Vector3{cameraXZ.x, playerPosition.y + CAMERA_HEIGHT_DIFFERENCE, cameraXZ.y}
+// }
 
 get_player_forward :: proc(transform: PlayerTransform) -> rl.Vector2 {
     start_direction := rl.Vector2 {1.0, 0.0}
@@ -475,26 +484,32 @@ main :: proc() {
 
     initialState := get_initial_game_state()
 
-    cameraInitialPosition := get_camera_position(initialState.playerTransform, initialState.cameraData)
+    //cameraInitialPosition := get_camera_position(initialState.playerTransform, initialState.cameraData)
 
     //fmt.printfln("player pos: %f, %f, %f", playerPosition.x, playerPosition.y, playerPosition.z)
-    fmt.printfln("camera pos: %f, %f, %f", cameraInitialPosition.x, cameraInitialPosition.y, cameraInitialPosition.z)
+    //fmt.printfln("camera pos: %f, %f, %f", cameraInitialPosition.x, cameraInitialPosition.y, cameraInitialPosition.z)
 
     cameraMode := rl.CameraMode.THIRD_PERSON
     camera := rl.Camera3D { 
-        cameraInitialPosition,
-        initialState.playerTransform.position,
+        rl.Vector3(0),
+        rl.Vector3(0),
         rl.Vector3 {0.0, 1.0, 0.0},
         45.0,
         rl.CameraProjection.PERSPECTIVE }
+
+    setup_camera(&camera, initialState.playerTransform)
     
     //cameraDir := rl.GetCameraForward(&camera)
     //fmt.printfln("camera dir: %f, %f, %f", cameraDir.x, cameraDir.y, cameraDir.z)
 
-    chair := rl.LoadModel("res/scenes/chair.glb")
-
+    lightingShader := rl.LoadShader("res/shaders/basic_lighting.vs", "res/shaders/basic_lighting.fs")
     // collisions calculated by bounding box (AABB)
     axisAlignedScene := rl.LoadModel("res/scenes/ikeamaze.glb")
+    //axisAlignedScene.materials[1].shader = lightingShader
+    // I can overwrite the shared on a per-mesh basis even though its just one model!
+    // the color from the original material is lost though... maybe painting vertex colors would work?
+    // what about textures from blender?? I guess I can acess them somehow if I find out where they are bound
+
     colliders := make([]rl.BoundingBox, axisAlignedScene.meshCount+1)
     for mesh, inx in axisAlignedScene.meshes[:axisAlignedScene.meshCount] {
         colliders[inx+1] = rl.GetMeshBoundingBox(mesh)
@@ -525,7 +540,6 @@ main :: proc() {
         }
     }
 
-    lightingShader := rl.LoadShader("res/shaders/basic_lighting.vs", "res/shaders/basic_lighting.fs")
     
     image := rl.GenImageChecked(512, 512, 64, 64, rl.RED, rl.BLUE)
     texture := rl.LoadTextureFromImage(image)
@@ -582,8 +596,9 @@ main :: proc() {
 
         /// From this point on, renderState should be used instead of current/prev state
 
-        camera.position = get_camera_position(renderState.playerTransform, renderState.cameraData)
-        camera.target = renderState.playerTransform.position
+        // camera.position = get_camera_position(renderState.playerTransform, renderState.cameraData)
+        // camera.target = renderState.playerTransform.position
+        setup_camera(&camera, renderState.playerTransform)
 
         rl.BeginDrawing()
             rl.ClearBackground(rl.RAYWHITE)
@@ -593,14 +608,13 @@ main :: proc() {
                 rl.DrawPlane(rl.Vector3{ 0.0, 0.0, 0.0}, rl.Vector2{ 200, 200 }, rl.GREEN) // Draw ground
 
                 // NOTE: this thing takes the rotation amount in degrees instead of radians -_-
-                rl.DrawModelEx(player, renderState.playerTransform.position, rl.Vector3{0.0, 1.0, 0.0}, renderState.playerTransform.rotation, 2.0, rl.GOLD)
-                //rl.DrawModel(chair, renderState.playerTransform.position, 1.0, rl.WHITE)
+                //rl.DrawModelEx(player, renderState.playerTransform.position, rl.Vector3{0.0, 1.0, 0.0}, renderState.playerTransform.rotation, 2.0, rl.GOLD)
 
                 rl.DrawModel(axisAlignedScene, rl.Vector3(0), 1.0, rl.WHITE)
                 rl.DrawModel(angledScene, rl.Vector3(0), 1.0, rl.WHITE)
 
-                playerBbbw := position_bounding_box(playerBb, renderState.playerTransform.position, 2.0)
-                rl.DrawBoundingBox(playerBbbw, rl.RED)
+                //playerBbbw := position_bounding_box(playerBb, renderState.playerTransform.position, 2.0)
+                //rl.DrawBoundingBox(playerBbbw, rl.RED)
 
                 for collider in colliders {
                     rl.DrawBoundingBox(collider, rl.RED)

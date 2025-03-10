@@ -1,4 +1,4 @@
-package mojsej
+package jamgame
 
 //import "core:container/queue"
 import rl "vendor:raylib"
