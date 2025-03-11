@@ -728,7 +728,6 @@ main :: proc() {
         actions = poll_actions_raw() if fixedUpdateRanLastFrame else poll_actions_inherit_queuable(actions)
         fixedUpdateRanLastFrame = false
 
-        fmt.println("interact: ", actions.interact)
         accumulator += frameTime
         origAccumulator := accumulator
         for accumulator >= DT {
