@@ -16,7 +16,8 @@ CameraRotation :: [2]f32
 InputActions :: struct {
     movement: MovementSet,
     jump: bool,
-    cameraRotation: CameraRotation
+    cameraRotation: CameraRotation,
+    interact: bool,
 }
 
 poll_actions :: proc{poll_actions_raw, poll_actions_inherit_queuable}
@@ -25,6 +26,7 @@ poll_actions_inherit_queuable :: proc(previousActions: InputActions) -> InputAct
 {
     actions := poll_actions_raw()
     actions.jump |= previousActions.jump
+    actions.interact |= previousActions.interact
 
     return actions
 }
@@ -59,13 +61,14 @@ poll_actions_raw :: proc() -> InputActions
     actions.movement = movement
 
     // Jumping
-    if rl.IsKeyPressed(.SPACE) {
-        actions.jump = true
-    }
+    actions.jump = rl.IsKeyPressed(.SPACE)
 
     // Camera rotation
     mouseDelta := rl.GetMouseDelta()
     actions.cameraRotation = CameraRotation(mouseDelta)
+
+    // Interact
+    actions.interact = rl.IsKeyPressed(.E)
 
     return actions
 }

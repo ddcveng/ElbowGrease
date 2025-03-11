@@ -60,6 +60,9 @@ ItemManager :: struct
 create_item_manager :: proc() -> ItemManager
 {
     manager := ItemManager {}
+    for type in ItemType {
+        manager.itemModels[type] = rl.LoadModelFromMesh(rl.GenMeshCube(1.0, 1.0, 1.0))
+    }
 
     manager.activeItem = ItemIdInvalid
 
@@ -68,6 +71,11 @@ create_item_manager :: proc() -> ItemManager
     }
 
     return manager
+}
+
+can_pickup_item :: proc(manager: ^ItemManager) -> bool
+{
+    return manager.activeItem == ItemIdInvalid
 }
 
 create_item :: proc(manager: ^ItemManager, itemPosition: Point3, itemDescriptor: ItemDescriptor) -> Item
@@ -123,6 +131,29 @@ get_placed_items :: proc(manager: ^ItemManager) -> []Item
 
     return placedItems
 }
+
+InteractableItem :: struct {
+    itemId: ItemId,
+}
+
+PlaceableOnGround :: struct {
+    spotValid: bool, // the player is aiming at a spot on the ground, but the spot may be invalid if the item cannot fit there
+}
+
+PlaceableInCart :: struct {
+    accepted: bool, // the player is aiming at the cart, but the item they are holding it not on the shopping list
+}
+
+NoInteraction :: struct {}
+
+ItemInteraction :: union #no_nil {
+    NoInteraction,
+    InteractableItem,
+    PlaceableOnGround,
+    PlaceableInCart,
+}
+
+
 
 // get interactable item
 // cast a ray in the looking direction, if it intersects an item and the item is close enough, it is interactable

@@ -157,18 +157,22 @@ interpolate_states :: proc(s0: ^GameState, s1: ^GameState, alpha: f32) -> GameSt
     return GameState {newPlayer, newPitch}
 }
 
+get_camera_view_vector :: proc(state: GameState) -> rl.Vector3
+{
+    playerFacingDirection := get_player_forward(state.player)
+    targetXZ := rl.Vector3 {playerFacingDirection.x, 0, playerFacingDirection.y}
+    playerSideways := get_player_sideways(state.player)
+    rotationAxis := rl.Vector3 {playerSideways.x, 0, playerSideways.y}
+
+    viewVector := rl.Vector3RotateByAxisAngle(targetXZ, rotationAxis, state.cameraPitch * rl.DEG2RAD)
+    return linalg.normalize(viewVector)
+}
+
 //first person camera
 setup_camera :: proc(camera: ^rl.Camera, state: GameState)
 {
     camera.position = state.player.position
-
-    playerFacingDirection := get_player_forward(state.player)
-    targetXZ := rl.Vector3 {playerFacingDirection.x, 0, playerFacingDirection.y}
-    playerSideways := get_player_sideways(state.player)
-    rotationAxis := rl.Vector3 {playerSideways.x, 0, playerSideways.y} //linalg.cross(targetXZ, camera.up)
-    rotated := rl.Vector3RotateByAxisAngle(targetXZ, rotationAxis, state.cameraPitch * rl.DEG2RAD)
-
-    camera.target = camera.position + rl.Vector3Normalize(rotated)
+    camera.target = camera.position + get_camera_view_vector(state)
 }
 
 // get_camera_position :: proc(player: Player, cameraData: PlayerFollowingCamera) -> rl.Vector3 {
@@ -266,13 +270,14 @@ TryGetCollidingBox :: proc(playerBb: rl.BoundingBox, colliders: []rl.BoundingBox
     return rl.BoundingBox{}, false
 }
 
+PLAYER_COLLIDER_RADIUS :: f32(1.0)
 TryGetCollidingTriangleNormal :: proc(playerPosition: Point3, triangles: []Triangle) -> (rl.Vector3, bool)
 {
     for tri in triangles {
         closestPoint := closest_point_on_triangle(playerPosition, tri.x, tri.y, tri.z)
         distance := linalg.length(playerPosition - closestPoint)
 
-        if distance < 1.0 { // radius of player collider sphere
+        if distance < PLAYER_COLLIDER_RADIUS {
             u := tri.y - tri.x
             v := tri.z - tri.x
             normal := linalg.normalize(linalg.cross(u, v))
@@ -514,6 +519,63 @@ ApplyVerticalMovement :: proc(originalState: GameState, actions: InputActions, c
     return newState
 }
 
+handle_interaction :: proc(itemInteraction: ItemInteraction, itemManager: ^ItemManager)
+{
+    switch interaction in itemInteraction {
+    case InteractableItem:
+        pickup_item(itemManager, interaction.itemId)
+
+    case PlaceableInCart:
+
+    case PlaceableOnGround:
+
+    case NoInteraction:
+    }
+}
+
+INTERACTION_RADIUS :: f32(2.0 + PLAYER_COLLIDER_RADIUS)
+
+get_possible_item_interaction :: proc(state: GameState, itemManager: ^ItemManager) -> ItemInteraction
+{
+    viewRay := rl.Ray{state.player.position, get_camera_view_vector(state)}
+
+    if can_pickup_item(itemManager) {
+        interactableItems := get_placed_items(itemManager)
+        intersectedItem := ItemIdInvalid
+
+        minIntersectionDistance := INTERACTION_RADIUS + rl.EPSILON
+        for item in interactableItems {
+            itemBox := itemManager.itemColliders[item.id]            
+            collision := rl.GetRayCollisionBox(viewRay, itemBox)
+            if collision.hit && collision.distance < minIntersectionDistance {
+                minIntersectionDistance = collision.distance
+                intersectedItem = item.id
+            }
+        }
+
+        if intersectedItem != ItemIdInvalid {
+            return InteractableItem{intersectedItem}
+        }
+
+        return NoInteraction{}
+    }
+
+    // the player is holding an item in hand
+    // get the ray again
+    // get intersection of the ray with scene geometry - that is the place where you want to place the item
+    // check if the item can be placed there - bounding box check with correction?? TBD
+    //      if not (common case), move the item along collided item normals to try and get it to a valid spot
+    //      if the corrections cause a collision, its an invalid spot
+    // if yes place
+
+    // collision with cart should be easy enough.
+    // if the ray intersects it, (but not through a wall!!), check the shopping list for the item
+    // and return the corresponding result
+
+    //TODO
+    return NoInteraction{}
+}
+
 create_collision_context :: proc(staticData: ^StaticData, itemManager: ^ItemManager) -> CollisionContext
 {
     placedItems := get_placed_items(itemManager)
@@ -531,6 +593,8 @@ create_collision_context :: proc(staticData: ^StaticData, itemManager: ^ItemMana
 FixedUpdate :: proc(previousState: GameState, actions: InputActions, staticData: ^StaticData, itemManager: ^ItemManager) -> GameState
 {
     collisionContext := create_collision_context(staticData, itemManager)
+    itemInteraction := get_possible_item_interaction(previousState, itemManager)
+
     currentState := ApplyVerticalMovement(previousState, actions, collisionContext)
 
     move := actions.movement
@@ -557,6 +621,10 @@ FixedUpdate :: proc(previousState: GameState, actions: InputActions, staticData:
     if (abs(actions.cameraRotation.y) > rl.EPSILON) {
         rotationAmount := -actions.cameraRotation.y * SENSITIVITY * DT
         currentState.cameraPitch += rotationAmount
+    }
+
+    if actions.interact {
+        handle_interaction(itemInteraction, itemManager)
     }
 
     return currentState
@@ -660,6 +728,7 @@ main :: proc() {
         actions = poll_actions_raw() if fixedUpdateRanLastFrame else poll_actions_inherit_queuable(actions)
         fixedUpdateRanLastFrame = false
 
+        fmt.println("interact: ", actions.interact)
         accumulator += frameTime
         origAccumulator := accumulator
         for accumulator >= DT {
@@ -703,6 +772,9 @@ main :: proc() {
             rl.EndMode3D()
 
             rl.DrawFPS(50, 50)
+            itemInHand := fmt.tprintf("in hand: %d", itemManager.activeItem)
+            rl.DrawText(strings.clone_to_cstring(itemInHand), 50, 70, 20, rl.BLACK)
+
             //debugMsg := fmt.tprintf("Keys: %i / %i", keysPickedUp, KEYS_NEEDED)
             //rl.DrawText(strings.clone_to_cstring(debugMsg), 10, 10, 20, rl.BLACK)
         rl.EndDrawing()
