@@ -19,7 +19,17 @@ InputActions :: struct {
     cameraRotation: CameraRotation
 }
 
-PollActions :: proc() -> InputActions
+poll_actions :: proc{poll_actions_raw, poll_actions_inherit_queuable}
+
+poll_actions_inherit_queuable :: proc(previousActions: InputActions) -> InputActions
+{
+    actions := poll_actions_raw()
+    actions.jump |= previousActions.jump
+
+    return actions
+}
+
+poll_actions_raw :: proc() -> InputActions
 {
     actions := InputActions{}
 

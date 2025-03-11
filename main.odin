@@ -77,8 +77,8 @@ PlayerFollowingCamera :: struct {
 
 GameState :: struct {
     playerTransform: PlayerTransform,
-    cameraData: PlayerFollowingCamera,
-    jumpQueued: bool,
+    //cameraData: PlayerFollowingCamera,
+    cameraPitch: f32,
 }
 
 // Hm.. keeping this up to date as the state grows will be tricky,
@@ -91,22 +91,23 @@ interpolate_states :: proc(s0: ^GameState, s1: ^GameState, alpha: f32) -> GameSt
         + s1.playerTransform.rotation * alpha
     newPlayerTransform := PlayerTransform {newPlayerPos, newPlayerRotation, s0.playerTransform.jumpTimer}
 
-    newCameraDist := s0.cameraData.distance * (1 - alpha)\
-        + s1.cameraData.distance * alpha
-    newCameraRotation := s0.cameraData.rotation * (1 - alpha)\
-        + s1.cameraData.rotation * alpha
-    newCameraData := PlayerFollowingCamera {newCameraDist, newCameraRotation}
+    newPitch := s0.cameraPitch * (1 - alpha) + s1.cameraPitch * alpha
 
-    return GameState {newPlayerTransform, newCameraData, s1.jumpQueued}
+    return GameState {newPlayerTransform, newPitch}
 }
 
 //first person camera
-setup_camera :: proc(camera: ^rl.Camera, playerTransform: PlayerTransform)
+setup_camera :: proc(camera: ^rl.Camera, state: GameState)
 {
-    playerFacingDirection := get_player_forward(playerTransform)
+    camera.position = state.playerTransform.position
 
-    camera.position = playerTransform.position
-    camera.target = camera.position + rl.Vector3 {playerFacingDirection.x, 0.0, playerFacingDirection.y}
+    playerFacingDirection := get_player_forward(state.playerTransform)
+    targetXZ := rl.Vector3 {playerFacingDirection.x, 0, playerFacingDirection.y}
+    playerSideways := get_player_sideways(state.playerTransform)
+    rotationAxis := rl.Vector3 {playerSideways.x, 0, playerSideways.y} //linalg.cross(targetXZ, camera.up)
+    rotated := rl.Vector3RotateByAxisAngle(targetXZ, rotationAxis, state.cameraPitch * rl.DEG2RAD)
+
+    camera.target = camera.position + rl.Vector3Normalize(rotated)
 }
 
 // get_camera_position :: proc(playerTransform: PlayerTransform, cameraData: PlayerFollowingCamera) -> rl.Vector3 {
@@ -182,9 +183,7 @@ get_gravity_force :: proc() -> Force
 get_initial_game_state :: proc() -> GameState
 {
     playerTransform := PlayerTransform {position=PLAYER_INITIAL_POSITION, rotation=CAMERA_INITIAL_ROTATION, jumpTimer=0.0}
-    cameraData := PlayerFollowingCamera { distance=CAMERA_DISTANCE, rotation=CAMERA_INITIAL_ROTATION }
-
-    return GameState {playerTransform, cameraData, false}
+    return GameState {playerTransform, 0}
 }
 
 
@@ -445,7 +444,7 @@ ApplyVerticalMovement :: proc(originalState: GameState, actions: InputActions, p
     return newState
 }
 
-Update :: proc(previousState: GameState, actions: InputActions, playerBb: rl.BoundingBox, colliders: []rl.BoundingBox, triangles: [][3]Point3) -> GameState
+FixedUpdate :: proc(previousState: GameState, actions: InputActions, playerBb: rl.BoundingBox, colliders: []rl.BoundingBox, triangles: [][3]Point3) -> GameState
 {
     currentState := ApplyVerticalMovement(previousState, actions, playerBb, colliders, triangles)
 
@@ -470,6 +469,10 @@ Update :: proc(previousState: GameState, actions: InputActions, playerBb: rl.Bou
         rotationAmount := -actions.cameraRotation.x * SENSITIVITY * DT
         currentState.playerTransform.rotation += rotationAmount
     }
+    if (abs(actions.cameraRotation.y) > rl.EPSILON) {
+        rotationAmount := -actions.cameraRotation.y * SENSITIVITY * DT
+        currentState.cameraPitch += rotationAmount
+    }
 
     return currentState
 }
@@ -484,12 +487,10 @@ main :: proc() {
 
     initialState := get_initial_game_state()
 
-    //cameraInitialPosition := get_camera_position(initialState.playerTransform, initialState.cameraData)
+    itemManager := ItemManager {}
+    create_item(&itemManager, PLAYER_INITIAL_POSITION + rl.Vector3{2.0, 0, 0}, { .Table, .Huge })
 
-    //fmt.printfln("player pos: %f, %f, %f", playerPosition.x, playerPosition.y, playerPosition.z)
-    //fmt.printfln("camera pos: %f, %f, %f", cameraInitialPosition.x, cameraInitialPosition.y, cameraInitialPosition.z)
-
-    cameraMode := rl.CameraMode.THIRD_PERSON
+    cameraMode := rl.CameraMode.FIRST_PERSON
     camera := rl.Camera3D { 
         rl.Vector3(0),
         rl.Vector3(0),
@@ -497,11 +498,8 @@ main :: proc() {
         45.0,
         rl.CameraProjection.PERSPECTIVE }
 
-    setup_camera(&camera, initialState.playerTransform)
+    setup_camera(&camera, initialState)
     
-    //cameraDir := rl.GetCameraForward(&camera)
-    //fmt.printfln("camera dir: %f, %f, %f", cameraDir.x, cameraDir.y, cameraDir.z)
-
     lightingShader := rl.LoadShader("res/shaders/basic_lighting.vs", "res/shaders/basic_lighting.fs")
     // collisions calculated by bounding box (AABB)
     axisAlignedScene := rl.LoadModel("res/scenes/ikeamaze.glb")
@@ -564,41 +562,34 @@ main :: proc() {
     // colliders[2] = position_bounding_box(playerBb, rl.Vector3{0.0, 4.0, 0.0})
     // colliders[3] = position_bounding_box(playerBb, rl.Vector3{0.0, 2.0, 2.0})
 
+    fixedUpdateRanLastFrame := false
+    actions := InputActions{}
+
     accumulator :f32= 0.0
     previousState := initialState
     currentState := initialState
 
     gameloop: for !rl.WindowShouldClose() {
         frameTime := rl.GetFrameTime()
-        actions := PollActions()
 
-        // hmm, this seems a little sketchy
-        // I need this since the update is not called every frame. 
-        // This means we can miss the frame when we press jump and update and the jump feels clunky.
-        // This ensures every jump key pressed results in a jump
-        previousState = currentState
-        if actions.jump {
-            currentState.jumpQueued = true
-        }
-        actions.jump |= currentState.jumpQueued
+        actions = poll_actions_raw() if fixedUpdateRanLastFrame else poll_actions_inherit_queuable(actions)
+        fixedUpdateRanLastFrame = false
 
         accumulator += frameTime
+        origAccumulator := accumulator
         for accumulator >= DT {
             previousState = currentState
-            currentState = Update(previousState, actions, playerBb, colliders[:], angledSceneTriangles[:])
-            currentState.jumpQueued = false
+            currentState = FixedUpdate(previousState, actions, playerBb, colliders[:], angledSceneTriangles[:])
 
             accumulator -= DT
+            fixedUpdateRanLastFrame = true
         }
 
         alpha := accumulator / DT
         renderState := interpolate_states(&previousState, &currentState, alpha)
 
         /// From this point on, renderState should be used instead of current/prev state
-
-        // camera.position = get_camera_position(renderState.playerTransform, renderState.cameraData)
-        // camera.target = renderState.playerTransform.position
-        setup_camera(&camera, renderState.playerTransform)
+        setup_camera(&camera, renderState)
 
         rl.BeginDrawing()
             rl.ClearBackground(rl.RAYWHITE)
@@ -616,9 +607,14 @@ main :: proc() {
                 //playerBbbw := position_bounding_box(playerBb, renderState.playerTransform.position, 2.0)
                 //rl.DrawBoundingBox(playerBbbw, rl.RED)
 
-                for collider in colliders {
-                    rl.DrawBoundingBox(collider, rl.RED)
+                // for collider in colliders {
+                //     rl.DrawBoundingBox(collider, rl.RED)
+                // }
+
+                for item in itemManager.items {
+                    rl.DrawModel(player, item.position, 1.0, rl.GOLD)
                 }
+
             rl.EndMode3D()
 
             rl.DrawFPS(50, 50)
