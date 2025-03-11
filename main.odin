@@ -25,6 +25,7 @@ CAMERA_INITIAL_ROTATION :: f32(0)
 CAMERA_HEIGHT_DIFFERENCE :: f32(1.5)
 
 Point3 :: [3]f32
+Triangle :: [3]Point3
 
 pos2LevelIndex :: proc(position: rl.Vector3) -> (int, int) {
     xInx := int(math.round((position.x - LEVEL_POSITION_X_START) / TILE_SIZE))
@@ -55,16 +56,10 @@ Deg :: f32
 
 Player :: struct {
     position: rl.Vector3, // implicitly pivot.center
-    rotation: Rad,
-    jumpTimer: f32,
-    model: rl.Model,
-}
-
-PlayerTransform :: struct {
-    position: rl.Vector3, // implicitly pivot.center
     rotation: Deg, // This is currenlty in degreees, since the rendering code takes it in degrees...
     // most of the calculations require this to be radians though so it kinda sucks
-    jumpTimer: f32
+
+    jumpTimer: f32,
 }
 
 // Distance should only change when we would intersect a wall. IN this case zoom the camera in a little to avoid it.
@@ -75,59 +70,125 @@ PlayerFollowingCamera :: struct {
     rotation: f32, // in radians, relative to players direction. 0 means the camera faces the same direction as the player. 
 }
 
+CollisionContext :: struct {
+    playerCollider: rl.BoundingBox,
+
+    sceneColliders: []rl.BoundingBox,
+    sceneTriangleColliders: []Triangle
+}
+
 GameState :: struct {
-    playerTransform: PlayerTransform,
+    player: Player,
     //cameraData: PlayerFollowingCamera,
     cameraPitch: f32,
+}
+
+StaticData :: struct {
+    playerModel: rl.Model,
+    playerCollider: rl.BoundingBox,
+
+    axisAlignedScene: rl.Model,
+    angledScene: rl.Model,
+
+    sceneAxisAlignedColliders: []rl.BoundingBox,
+    sceneTriangleColliders: []Triangle,
+}
+
+setup_static_data :: proc() -> StaticData
+{
+    // @nocheckin having the player be a non-cube/ sphere will require changes to the collision detection logic
+    playerModel := rl.LoadModelFromMesh(rl.GenMeshCube(1.0, 1.0, 1.0))
+    playerBoundingBox := rl.GetModelBoundingBox(playerModel)
+
+    axisAlignedScene := rl.LoadModel("res/scenes/ikeamaze.glb")
+    //axisAlignedScene.materials[1].shader = lightingShader
+    // I can overwrite the shared on a per-mesh basis even though its just one model!
+    // the color from the original material is lost though... maybe painting vertex colors would work?
+    // what about textures from blender?? I guess I can acess them somehow if I find out where they are bound
+
+    colliders := make([]rl.BoundingBox, axisAlignedScene.meshCount+1)
+    for mesh, inx in axisAlignedScene.meshes[:axisAlignedScene.meshCount] {
+        colliders[inx+1] = rl.GetMeshBoundingBox(mesh)
+    }
+
+    // ground collider
+    colliders[0] = rl.BoundingBox { rl.Vector3{-100, 0, -100}, rl.Vector3 {100, 0, 100} }
+
+    // collisions calculated by triangle intersection (these are rotated objects and stuff where the aabb is not good enough)
+    angledScene := rl.LoadModel("res/scenes/sceneAngled.glb")
+    angledMeshes := angledScene.meshes[:angledScene.meshCount]
+    //triangleCount := slice.reduce(angledMeshes, 0, proc(accumulator: int, mesh: rl.Mesh) -> int { return accumulator + int(mesh.triangleCount)})
+    //angledSceneTriangles := make([]Triangle, triangleCount)
+    angledSceneTriangles: [dynamic]Triangle
+    
+    for mesh in angledMeshes {
+        vertexComponents := mesh.vertices[:3 * mesh.vertexCount]
+        vertices: [dynamic]Point3
+
+        for i := 0; i < len(vertexComponents); i += 3 {
+            vertex := Point3{ vertexComponents[i], vertexComponents[i+1], vertexComponents[i+2] }
+            append(&vertices, vertex)
+        }
+
+
+        indices := mesh.indices[:3 * mesh.triangleCount]
+        for i := 0; i < len(indices); i += 3 {
+            triangle: Triangle = {vertices[indices[i]], vertices[indices[i+1]], vertices[indices[i+2]]}
+            append(&angledSceneTriangles, triangle)
+        }
+    }
+
+    return StaticData {playerModel, playerBoundingBox, axisAlignedScene, angledScene, colliders, angledSceneTriangles[:]}
+
 }
 
 // Hm.. keeping this up to date as the state grows will be tricky,
 // can I maybe generate this? or say that if the actual leafs of  the state graph are vectors or scalars,
 // I can automatically inspect the type and interpolate them ??
 interpolate_states :: proc(s0: ^GameState, s1: ^GameState, alpha: f32) -> GameState {
-    newPlayerPos := s0.playerTransform.position * (1 - alpha)\
-        + s1.playerTransform.position * alpha
-    newPlayerRotation := s0.playerTransform.rotation * (1 - alpha)\
-        + s1.playerTransform.rotation * alpha
-    newPlayerTransform := PlayerTransform {newPlayerPos, newPlayerRotation, s0.playerTransform.jumpTimer}
+    newPlayerPos := s0.player.position * (1 - alpha)\
+        + s1.player.position * alpha
+    newPlayerRotation := s0.player.rotation * (1 - alpha)\
+        + s1.player.rotation * alpha
+    newPlayer := Player {newPlayerPos, newPlayerRotation, s0.player.jumpTimer}
 
     newPitch := s0.cameraPitch * (1 - alpha) + s1.cameraPitch * alpha
 
-    return GameState {newPlayerTransform, newPitch}
+    return GameState {newPlayer, newPitch}
 }
 
 //first person camera
 setup_camera :: proc(camera: ^rl.Camera, state: GameState)
 {
-    camera.position = state.playerTransform.position
+    camera.position = state.player.position
 
-    playerFacingDirection := get_player_forward(state.playerTransform)
+    playerFacingDirection := get_player_forward(state.player)
     targetXZ := rl.Vector3 {playerFacingDirection.x, 0, playerFacingDirection.y}
-    playerSideways := get_player_sideways(state.playerTransform)
+    playerSideways := get_player_sideways(state.player)
     rotationAxis := rl.Vector3 {playerSideways.x, 0, playerSideways.y} //linalg.cross(targetXZ, camera.up)
     rotated := rl.Vector3RotateByAxisAngle(targetXZ, rotationAxis, state.cameraPitch * rl.DEG2RAD)
 
     camera.target = camera.position + rl.Vector3Normalize(rotated)
 }
 
-// get_camera_position :: proc(playerTransform: PlayerTransform, cameraData: PlayerFollowingCamera) -> rl.Vector3 {
+// get_camera_position :: proc(player: Player, cameraData: PlayerFollowingCamera) -> rl.Vector3 {
 //     // direction projected to the XY plane.
-//     playerPosition := playerTransform.position
-//     playerFacingDirection := get_player_forward(playerTransform)
+//     playerPosition := player.position
+//     playerFacingDirection := get_player_forward(player)
 //     rotatedDirection := rl.Vector2Rotate(playerFacingDirection, cameraData.rotation)
 //     cameraXZ := playerPosition.xz - (cameraData.distance * rotatedDirection)
 //
 //     return rl.Vector3{cameraXZ.x, playerPosition.y + CAMERA_HEIGHT_DIFFERENCE, cameraXZ.y}
 // }
 
-get_player_forward :: proc(transform: PlayerTransform) -> rl.Vector2 {
+get_player_forward :: proc(transform: Player) -> rl.Vector2 {
     start_direction := rl.Vector2 {1.0, 0.0}
     rotation_corrected := -transform.rotation * rl.DEG2RAD // Convert to radians and make the rotation clockwise
 
     return rl.Vector2Rotate(start_direction, rotation_corrected)
 }
 
-get_player_sideways :: proc(transform: PlayerTransform) -> rl.Vector2 {
+get_player_sideways :: proc(transform: Player) -> rl.Vector2 {
     start_direction := rl.Vector2 {1.0, 0.0}
     rotation_corrected := -transform.rotation * rl.DEG2RAD // Convert to radians and make the rotation clockwise
 
@@ -157,19 +218,19 @@ GRAVITY :: 10.0
 SPEED :: 5.0
 SENSITIVITY :: 5.0
 
-get_forward_input_force :: proc(playerTransform: PlayerTransform) -> Force
+get_forward_input_force :: proc(player: Player) -> Force
 {
     movementFromInput := get_movement_direction_from_input()
-    forwardVector := get_player_forward(playerTransform)
+    forwardVector := get_player_forward(player)
     forward3d := rl.Vector3 { forwardVector.x, 0, forwardVector.y }
 
     return Force { movementFromInput.x * SPEED * forward3d, true } 
 }
 
-get_sideways_input_force :: proc(playerTransform: PlayerTransform) -> Force
+get_sideways_input_force :: proc(player: Player) -> Force
 {
     movementFromInput := get_movement_direction_from_input()
-    sidewaysVector := get_player_sideways(playerTransform)
+    sidewaysVector := get_player_sideways(player)
     sideways3d := rl.Vector3 { sidewaysVector.x, 0, sidewaysVector.y }
 
     return Force { movementFromInput.y * SPEED *sideways3d, true } 
@@ -182,8 +243,8 @@ get_gravity_force :: proc() -> Force
 
 get_initial_game_state :: proc() -> GameState
 {
-    playerTransform := PlayerTransform {position=PLAYER_INITIAL_POSITION, rotation=CAMERA_INITIAL_ROTATION, jumpTimer=0.0}
-    return GameState {playerTransform, 0}
+    player := Player {position=PLAYER_INITIAL_POSITION, rotation=CAMERA_INITIAL_ROTATION, jumpTimer=0.0}
+    return GameState {player, 0}
 }
 
 
@@ -205,7 +266,7 @@ TryGetCollidingBox :: proc(playerBb: rl.BoundingBox, colliders: []rl.BoundingBox
     return rl.BoundingBox{}, false
 }
 
-TryGetCollidingTriangleNormal :: proc(playerPosition: Point3, triangles: [][3]Point3) -> (rl.Vector3, bool)
+TryGetCollidingTriangleNormal :: proc(playerPosition: Point3, triangles: []Triangle) -> (rl.Vector3, bool)
 {
     for tri in triangles {
         closestPoint := closest_point_on_triangle(playerPosition, tri.x, tri.y, tri.z)
@@ -223,17 +284,30 @@ TryGetCollidingTriangleNormal :: proc(playerPosition: Point3, triangles: [][3]Po
     return {}, false
 }
 
-CheckAnyCollision :: proc(playerBb: rl.BoundingBox, colliders: []rl.BoundingBox, triangles: [][3]Point3) -> bool
+CheckAnyCollision :: proc(player: Player, collisionContext: CollisionContext) -> bool
 {
-    box, collision := TryGetCollidingBox(playerBb, colliders)
+    playerCollider := position_bounding_box(collisionContext.playerCollider, player.position)
+
+    box, collision := TryGetCollidingBox(playerCollider, collisionContext.sceneColliders)
     if collision {
         return true
     }
 
-    playerPosition := (playerBb.max - playerBb.min) / 2
-    n, triCollision := TryGetCollidingTriangleNormal(playerPosition, triangles)
+    //playerPosition := (playerBb.max - playerBb.min) / 2
+    n, triCollision := TryGetCollidingTriangleNormal(player.position, collisionContext.sceneTriangleColliders)
     return triCollision
 }
+// CheckAnyCollision :: proc(playerBb: rl.BoundingBox, colliders: []rl.BoundingBox, triangles: []Triangle) -> bool
+// {
+//     box, collision := TryGetCollidingBox(playerBb, colliders)
+//     if collision {
+//         return true
+//     }
+//
+//     playerPosition := (playerBb.max - playerBb.min) / 2
+//     n, triCollision := TryGetCollidingTriangleNormal(playerPosition, triangles)
+//     return triCollision
+// }
 
 Interval :: struct {
     min: f32,
@@ -346,22 +420,21 @@ Force :: struct {
 
 ForceSource :: enum { InputForward, InputSideways, Gravity } 
 
-MoveAndSlide :: proc(originalState: GameState, movementDirection: rl.Vector3, playerBoundingBox: rl.BoundingBox, colliders: []rl.BoundingBox, triangles: [][3]Point3) -> GameState
+MoveAndSlide :: proc(originalState: GameState, movementDirection: rl.Vector3, collisionContext: CollisionContext) -> GameState
 {
     newState := originalState
-    newState.playerTransform.position += movementDirection * SPEED * DT
+    newState.player.position += movementDirection * SPEED * DT
 
-    playerBbAfterMove := position_bounding_box(playerBoundingBox, newState.playerTransform.position, 2.0)
-    collidedBox, collision := TryGetCollidingBox(playerBbAfterMove, colliders)
+    playerBbAfterMove := position_bounding_box(collisionContext.playerCollider, newState.player.position)
+    collidedBox, collision := TryGetCollidingBox(playerBbAfterMove, collisionContext.sceneColliders)
     if collision
     {
         newState = originalState
         redirected := GetWallSlidingDirection(playerBbAfterMove, collidedBox, movementDirection)
 
-        newState.playerTransform.position += redirected * SPEED * DT
-        playerBbAfterRedirect := position_bounding_box(playerBoundingBox, newState.playerTransform.position, 2.0)
+        newState.player.position += redirected * SPEED * DT
 
-        rCollision := CheckAnyCollision(playerBbAfterRedirect, colliders, triangles)
+        rCollision := CheckAnyCollision(newState.player, collisionContext)
         if rCollision {
             fmt.printfln("redirected: %f, %f, %f", redirected.x, redirected.y, redirected.z)
             return originalState
@@ -370,7 +443,7 @@ MoveAndSlide :: proc(originalState: GameState, movementDirection: rl.Vector3, pl
 
     // check collision with triangles 
     // find the normal of the triangle 
-    triangleNormal, triCollision := TryGetCollidingTriangleNormal(newState.playerTransform.position, triangles)
+    triangleNormal, triCollision := TryGetCollidingTriangleNormal(newState.player.position, collisionContext.sceneTriangleColliders)
     if triCollision {
         newState = originalState
 
@@ -379,10 +452,9 @@ MoveAndSlide :: proc(originalState: GameState, movementDirection: rl.Vector3, pl
             fmt.printfln("sliding along direction: %f, %f, %f", triangleNormal.x, triangleNormal.y, triangleNormal.z)
             projectedDirection := movementDirection - triangleNormal * directionDotNormal
 
-            newState.playerTransform.position += projectedDirection * SPEED * DT
-            playerBbAfterSlide := position_bounding_box(playerBoundingBox, newState.playerTransform.position, 2.0)
+            newState.player.position += projectedDirection * SPEED * DT
 
-            slideCollision := CheckAnyCollision(playerBbAfterSlide, colliders, triangles)
+            slideCollision := CheckAnyCollision(newState.player, collisionContext)
             if slideCollision {
                 fmt.printfln("slide failed in direction: %f, %f, %f", projectedDirection.x, projectedDirection.y, projectedDirection.z)
                 return originalState
@@ -396,27 +468,26 @@ MoveAndSlide :: proc(originalState: GameState, movementDirection: rl.Vector3, pl
 JUMP_HEIGHT :: 5.0
 JUMP_DURATION_SECONDS :: 0.3
 JUMP_SPEED :: JUMP_HEIGHT / JUMP_DURATION_SECONDS
-ApplyVerticalMovement :: proc(originalState: GameState, actions: InputActions, playerBoundingBox: rl.BoundingBox, colliders: []rl.BoundingBox, triangles: [][3]Point3) -> GameState
+ApplyVerticalMovement :: proc(originalState: GameState, actions: InputActions, collisionContext: CollisionContext) -> GameState
 {
     // if any jump force remains, decay it and apply it
     //      if jump causes collision, stop the jump force at once
-    jumpTimer := originalState.playerTransform.jumpTimer
+    jumpTimer := originalState.player.jumpTimer
     if jumpTimer > rl.EPSILON {
         jumpDt := min(jumpTimer, DT) 
 
         newState := originalState
-        newState.playerTransform.position += rl.Vector3{0, 1, 0} * JUMP_SPEED * jumpDt
+        newState.player.position += rl.Vector3{0, 1, 0} * JUMP_SPEED * jumpDt
 
-        playerBbAfterMove := position_bounding_box(playerBoundingBox, newState.playerTransform.position, 2.0)
-        collision := CheckAnyCollision(playerBbAfterMove, colliders, triangles)
+        collision := CheckAnyCollision(newState.player, collisionContext)
         if collision {
             collidedState := originalState
-            collidedState.playerTransform.jumpTimer = 0
+            collidedState.player.jumpTimer = 0
 
             return collidedState
         }
 
-        newState.playerTransform.jumpTimer -= DT // I don't care the last iteration will make it negative
+        newState.player.jumpTimer -= DT // I don't care the last iteration will make it negative
         return newState
     }
     
@@ -424,16 +495,15 @@ ApplyVerticalMovement :: proc(originalState: GameState, actions: InputActions, p
     // if grounded, check for jump inputs
     gravityPositionDelta := rl.Vector3{0, -1, 0} * GRAVITY * DT
     newState := originalState
-    newState.playerTransform.position += gravityPositionDelta
+    newState.player.position += gravityPositionDelta
 
-    playerBbAfterGravity := position_bounding_box(playerBoundingBox, newState.playerTransform.position, 2.0)
-    collision := CheckAnyCollision(playerBbAfterGravity, colliders, triangles)
+    collision := CheckAnyCollision(newState.player, collisionContext)
     if collision {
         groundedState := originalState
 
         if actions.jump {
             startJumpState := groundedState
-            startJumpState.playerTransform.jumpTimer = JUMP_DURATION_SECONDS
+            startJumpState.player.jumpTimer = JUMP_DURATION_SECONDS
 
             return startJumpState
         }
@@ -444,30 +514,45 @@ ApplyVerticalMovement :: proc(originalState: GameState, actions: InputActions, p
     return newState
 }
 
-FixedUpdate :: proc(previousState: GameState, actions: InputActions, playerBb: rl.BoundingBox, colliders: []rl.BoundingBox, triangles: [][3]Point3) -> GameState
+create_collision_context :: proc(staticData: ^StaticData, itemManager: ^ItemManager) -> CollisionContext
 {
-    currentState := ApplyVerticalMovement(previousState, actions, playerBb, colliders, triangles)
+    placedItems := get_placed_items(itemManager)
+    placedItemColliders := make([]rl.BoundingBox, len(placedItems))
+    for item, i in placedItems {
+        placedItemColliders[i] = itemManager.itemColliders[item.id]
+    }
+
+    colliderSlices := [][]rl.BoundingBox{ placedItemColliders, staticData.sceneAxisAlignedColliders }
+    collidersMerged := slice.concatenate(colliderSlices)   
+
+    return CollisionContext { staticData.playerCollider,  collidersMerged, staticData.sceneTriangleColliders}
+}
+
+FixedUpdate :: proc(previousState: GameState, actions: InputActions, staticData: ^StaticData, itemManager: ^ItemManager) -> GameState
+{
+    collisionContext := create_collision_context(staticData, itemManager)
+    currentState := ApplyVerticalMovement(previousState, actions, collisionContext)
 
     move := actions.movement
     if .Forward in move || .Backward in move {
         direction :f32= 1 if .Forward in move else -1
-        forwardVector := get_player_forward(previousState.playerTransform)
+        forwardVector := get_player_forward(previousState.player)
         forward3d := rl.Vector3 { forwardVector.x, 0, forwardVector.y } * direction
 
-        currentState = MoveAndSlide(currentState, forward3d, playerBb, colliders, triangles)
+        currentState = MoveAndSlide(currentState, forward3d, collisionContext)
     } 
     if .Left in move || .Right in move {
         direction :f32= 1 if .Right in move else -1
-        sidewaysVector := get_player_sideways(previousState.playerTransform)
+        sidewaysVector := get_player_sideways(previousState.player)
         sideways3d := rl.Vector3 { sidewaysVector.x, 0, sidewaysVector.y } * direction
 
-        currentState = MoveAndSlide(currentState, sideways3d, playerBb, colliders, triangles)
+        currentState = MoveAndSlide(currentState, sideways3d, collisionContext)
     }
 
     // Rotation
     if (abs(actions.cameraRotation.x) > rl.EPSILON) {
         rotationAmount := -actions.cameraRotation.x * SENSITIVITY * DT
-        currentState.playerTransform.rotation += rotationAmount
+        currentState.player.rotation += rotationAmount
     }
     if (abs(actions.cameraRotation.y) > rl.EPSILON) {
         rotationAmount := -actions.cameraRotation.y * SENSITIVITY * DT
@@ -484,10 +569,10 @@ main :: proc() {
     rl.DisableCursor()
     rl.SetTargetFPS(FPS)
 
-
+    staticData := setup_static_data()
     initialState := get_initial_game_state()
 
-    itemManager := ItemManager {}
+    itemManager := create_item_manager()
     create_item(&itemManager, PLAYER_INITIAL_POSITION + rl.Vector3{2.0, 0, 0}, { .Table, .Huge })
 
     cameraMode := rl.CameraMode.FIRST_PERSON
@@ -500,50 +585,50 @@ main :: proc() {
 
     setup_camera(&camera, initialState)
     
-    lightingShader := rl.LoadShader("res/shaders/basic_lighting.vs", "res/shaders/basic_lighting.fs")
+    //lightingShader := rl.LoadShader("res/shaders/basic_lighting.vs", "res/shaders/basic_lighting.fs")
     // collisions calculated by bounding box (AABB)
-    axisAlignedScene := rl.LoadModel("res/scenes/ikeamaze.glb")
-    //axisAlignedScene.materials[1].shader = lightingShader
-    // I can overwrite the shared on a per-mesh basis even though its just one model!
-    // the color from the original material is lost though... maybe painting vertex colors would work?
-    // what about textures from blender?? I guess I can acess them somehow if I find out where they are bound
+    // axisAlignedScene := rl.LoadModel("res/scenes/ikeamaze.glb")
+    // //axisAlignedScene.materials[1].shader = lightingShader
+    // // I can overwrite the shared on a per-mesh basis even though its just one model!
+    // // the color from the original material is lost though... maybe painting vertex colors would work?
+    // // what about textures from blender?? I guess I can acess them somehow if I find out where they are bound
+    //
+    // colliders := make([]rl.BoundingBox, axisAlignedScene.meshCount+1)
+    // for mesh, inx in axisAlignedScene.meshes[:axisAlignedScene.meshCount] {
+    //     colliders[inx+1] = rl.GetMeshBoundingBox(mesh)
+    // }
+    // colliders[0] = rl.BoundingBox { rl.Vector3{-100, 0, -100}, rl.Vector3 {100, 0, 100} }
+    //
+    // // collisions calculated by triangle intersection (these are rotated objects and stuff where the aabb is not good enough)
+    // angledScene := rl.LoadModel("res/scenes/sceneAngled.glb")
+    // angledMeshes := angledScene.meshes[:angledScene.meshCount]
+    // //triangleCount := slice.reduce(angledMeshes, 0, proc(accumulator: int, mesh: rl.Mesh) -> int { return accumulator + int(mesh.triangleCount)})
+    // //angledSceneTriangles := make([]Triangle, triangleCount)
+    // angledSceneTriangles: [dynamic]Triangle
+    // 
+    // for mesh in angledMeshes {
+    //     vertexComponents := mesh.vertices[:3 * mesh.vertexCount]
+    //     vertices: [dynamic]Point3
+    //
+    //     for i := 0; i < len(vertexComponents); i += 3 {
+    //         vertex := Point3{ vertexComponents[i], vertexComponents[i+1], vertexComponents[i+2] }
+    //         append(&vertices, vertex)
+    //     }
+    //
+    //
+    //     indices := mesh.indices[:3 * mesh.triangleCount]
+    //     for i := 0; i < len(indices); i += 3 {
+    //         triangle: Triangle = {vertices[indices[i]], vertices[indices[i+1]], vertices[indices[i+2]]}
+    //         append(&angledSceneTriangles, triangle)
+    //     }
+    // }
 
-    colliders := make([]rl.BoundingBox, axisAlignedScene.meshCount+1)
-    for mesh, inx in axisAlignedScene.meshes[:axisAlignedScene.meshCount] {
-        colliders[inx+1] = rl.GetMeshBoundingBox(mesh)
-    }
-    colliders[0] = rl.BoundingBox { rl.Vector3{-100, 0, -100}, rl.Vector3 {100, 0, 100} }
-
-    // collisions calculated by triangle intersection (these are rotated objects and stuff where the aabb is not good enough)
-    angledScene := rl.LoadModel("res/scenes/sceneAngled.glb")
-    angledMeshes := angledScene.meshes[:angledScene.meshCount]
-    //triangleCount := slice.reduce(angledMeshes, 0, proc(accumulator: int, mesh: rl.Mesh) -> int { return accumulator + int(mesh.triangleCount)})
-    //angledSceneTriangles := make([][3]Point3, triangleCount)
-    angledSceneTriangles: [dynamic][3]Point3
     
-    for mesh in angledMeshes {
-        vertexComponents := mesh.vertices[:3 * mesh.vertexCount]
-        vertices: [dynamic]Point3
-
-        for i := 0; i < len(vertexComponents); i += 3 {
-            vertex := Point3{ vertexComponents[i], vertexComponents[i+1], vertexComponents[i+2] }
-            append(&vertices, vertex)
-        }
-
-
-        indices := mesh.indices[:3 * mesh.triangleCount]
-        for i := 0; i < len(indices); i += 3 {
-            triangle: [3]Point3 = {vertices[indices[i]], vertices[indices[i+1]], vertices[indices[i+2]]}
-            append(&angledSceneTriangles, triangle)
-        }
-    }
-
+    //image := rl.GenImageChecked(512, 512, 64, 64, rl.RED, rl.BLUE)
+    //texture := rl.LoadTextureFromImage(image)
     
-    image := rl.GenImageChecked(512, 512, 64, 64, rl.RED, rl.BLUE)
-    texture := rl.LoadTextureFromImage(image)
-    
-    player := rl.LoadModelFromMesh(rl.GenMeshCube(1.0, 1.0, 1.0))
-    playerBb := rl.GetModelBoundingBox(player)
+    // playerModel := rl.LoadModelFromMesh(rl.GenMeshCube(1.0, 1.0, 1.0))
+    // playerBb := rl.GetModelBoundingBox(playerModel)
     // player is a Model
     // Model has a .transform matrix field
     // 
@@ -552,9 +637,9 @@ main :: proc() {
     // this can all be encoded in the transform matrix, but when I want to draw the model, I only have functions that take position and or rotation as well. 
     
     // For the shader to work, I need to setup the texture sampler and use it in the fragment shader
-    cube := rl.LoadModelFromMesh(rl.GenMeshCube(1.0, 1.0, 1.0))
-    cube.materials[0].shader = lightingShader
-    cube.materials[0].maps[rl.MaterialMapIndex.ALBEDO].texture = texture
+    // cube := rl.LoadModelFromMesh(rl.GenMeshCube(1.0, 1.0, 1.0))
+    // cube.materials[0].shader = lightingShader
+    // cube.materials[0].maps[rl.MaterialMapIndex.ALBEDO].texture = texture
 
     // colliders: [4]rl.BoundingBox
     // colliders[0] = rl.BoundingBox { rl.Vector3{-5, 0, -5}, rl.Vector3 {5, 0, 5} }
@@ -579,7 +664,7 @@ main :: proc() {
         origAccumulator := accumulator
         for accumulator >= DT {
             previousState = currentState
-            currentState = FixedUpdate(previousState, actions, playerBb, colliders[:], angledSceneTriangles[:])
+            currentState = FixedUpdate(previousState, actions, &staticData, &itemManager)
 
             accumulator -= DT
             fixedUpdateRanLastFrame = true
@@ -599,20 +684,20 @@ main :: proc() {
                 rl.DrawPlane(rl.Vector3{ 0.0, 0.0, 0.0}, rl.Vector2{ 200, 200 }, rl.GREEN) // Draw ground
 
                 // NOTE: this thing takes the rotation amount in degrees instead of radians -_-
-                //rl.DrawModelEx(player, renderState.playerTransform.position, rl.Vector3{0.0, 1.0, 0.0}, renderState.playerTransform.rotation, 2.0, rl.GOLD)
+                //rl.DrawModelEx(player, renderState.player.position, rl.Vector3{0.0, 1.0, 0.0}, renderState.playerTransform.rotation, 2.0, rl.GOLD)
 
-                rl.DrawModel(axisAlignedScene, rl.Vector3(0), 1.0, rl.WHITE)
-                rl.DrawModel(angledScene, rl.Vector3(0), 1.0, rl.WHITE)
+                rl.DrawModel(staticData.axisAlignedScene, rl.Vector3(0), 1.0, rl.WHITE)
+                rl.DrawModel(staticData.angledScene, rl.Vector3(0), 1.0, rl.WHITE)
 
-                //playerBbbw := position_bounding_box(playerBb, renderState.playerTransform.position, 2.0)
+                //playerBbbw := position_bounding_box(playerBb, renderState.player.position, 2.0)
                 //rl.DrawBoundingBox(playerBbbw, rl.RED)
 
                 // for collider in colliders {
                 //     rl.DrawBoundingBox(collider, rl.RED)
                 // }
 
-                for item in itemManager.items {
-                    rl.DrawModel(player, item.position, 1.0, rl.GOLD)
+                for item in get_placed_items(&itemManager) {
+                    rl.DrawModel(staticData.playerModel, item.position, 1.0, rl.GOLD) //TODO draw the right model...
                 }
 
             rl.EndMode3D()
@@ -623,7 +708,7 @@ main :: proc() {
         rl.EndDrawing()
     }
 
-    rl.UnloadModel(cube)
-    rl.UnloadShader(lightingShader)
+    // rl.UnloadModel(cube)
+    // rl.UnloadShader(lightingShader)
     rl.CloseWindow()
 }
