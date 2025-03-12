@@ -89,6 +89,7 @@ GameState :: struct {
     //cameraData: PlayerFollowingCamera,
     cameraPitch: f32,
     interactAnimationTimer: f32,
+    availableInteraction: ItemInteraction,
 }
 
 StaticData :: struct {
@@ -234,7 +235,7 @@ interpolate_states :: proc(s0: ^GameState, s1: ^GameState, alpha: f32) -> GameSt
         newIATimer = s0.interactAnimationTimer * (1 - alpha) + s1.interactAnimationTimer * alpha
     }
 
-    return GameState {newPlayer, newPitch, newIATimer}
+    return GameState {newPlayer, newPitch, newIATimer, s0.availableInteraction}
 }
 
 get_camera_view_vector :: proc(state: GameState) -> rl.Vector3
@@ -328,7 +329,7 @@ get_gravity_force :: proc() -> Force
 get_initial_game_state :: proc() -> GameState
 {
     player := Player {position=PLAYER_INITIAL_POSITION, rotation=CAMERA_INITIAL_ROTATION, jumpTimer=0.0}
-    return GameState {player, 0, 0.0}
+    return GameState {player, 0, 0.0, {}}
 }
 
 
@@ -673,7 +674,7 @@ create_collision_context :: proc(staticData: ^StaticData, itemManager: ^ItemMana
 FixedUpdate :: proc(previousState: GameState, actions: InputActions, staticData: ^StaticData, itemManager: ^ItemManager) -> GameState
 {
     collisionContext := create_collision_context(staticData, itemManager)
-    itemInteraction := get_possible_item_interaction(previousState, itemManager)
+    availableInteraction := get_possible_item_interaction(previousState, itemManager)
 
     currentState := ApplyVerticalMovement(previousState, actions, collisionContext)
 
@@ -704,12 +705,20 @@ FixedUpdate :: proc(previousState: GameState, actions: InputActions, staticData:
     }
 
     interactOnCooldown := currentState.interactAnimationTimer > rl.EPSILON
-    if !interactOnCooldown && actions.interact {
-        handle_interaction(itemInteraction, itemManager)
-        currentState.interactAnimationTimer = ANIMATION_LENGHT 
-    }
     if interactOnCooldown {
         currentState.interactAnimationTimer -= DT
+    }
+    else {
+        currentState.availableInteraction = availableInteraction
+
+        if actions.interact && type_of(availableInteraction) != NoInteraction {
+            handle_interaction(availableInteraction, itemManager)
+
+            // put interact on cooldown
+            currentState.interactAnimationTimer = ANIMATION_LENGHT 
+            // the interaction was handled, clear it
+            currentState.availableInteraction = NoInteraction{}
+        }
     }
 
     return currentState
@@ -743,7 +752,7 @@ main :: proc() {
     initialState := get_initial_game_state()
 
     itemManager := create_item_manager()
-    create_item(&itemManager, PLAYER_INITIAL_POSITION + rl.Vector3{2.0, 0, 0}, { .Table, .Huge })
+    create_item(&itemManager, PLAYER_INITIAL_POSITION + rl.Vector3{2.0, -1, 0}, { .Table, .Huge })
 
     cameraMode := rl.CameraMode.FIRST_PERSON
     camera := rl.Camera3D { 
@@ -835,6 +844,14 @@ main :: proc() {
 
             handState: HandState = HandHoldingItem{1, heldItemTexture.texture} if itemInHand else EmptyHand{0}
             draw_hand(handTex, renderState.interactAnimationTimer, handState)
+
+            if interaction, ok := currentState.availableInteraction.(InteractableItem); ok {
+                interactionMessage := "Press \"E\" to pickup the item"
+                messageCstring := strings.clone_to_cstring(interactionMessage)
+                textWidth := rl.MeasureText(messageCstring, 32)
+
+                rl.DrawText(strings.clone_to_cstring(interactionMessage), WINDOW_WIDTH / 2 - textWidth / 2, WINDOW_HEIGHT / 2, 32, rl.BROWN)
+            }
 
             //debugMsg := fmt.tprintf("Keys: %i / %i", keysPickedUp, KEYS_NEEDED)
             //rl.DrawText(strings.clone_to_cstring(debugMsg), 10, 10, 20, rl.BLACK)
