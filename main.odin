@@ -24,6 +24,13 @@ CAMERA_DISTANCE :: f32(6)
 CAMERA_INITIAL_ROTATION :: f32(0)
 CAMERA_HEIGHT_DIFFERENCE :: f32(1.5)
 
+WINDOW_WIDTH :: 1200
+WINDOW_HEIGHT :: 900
+SHEET_TILE_SIZE :: 1024
+SHEET_RESIZED_TILE_SIZE :: f32(WINDOW_HEIGHT / 2)
+
+HELD_ITEM_SIZE :: WINDOW_HEIGHT / 6.0
+
 Point3 :: [3]f32
 Triangle :: [3]Point3
 
@@ -81,6 +88,7 @@ GameState :: struct {
     player: Player,
     //cameraData: PlayerFollowingCamera,
     cameraPitch: f32,
+    interactAnimationTimer: f32,
 }
 
 StaticData :: struct {
@@ -142,6 +150,73 @@ setup_static_data :: proc() -> StaticData
 
 }
 
+EmptyHand :: struct {
+    spriteIndex: int,
+}
+
+HandHoldingItem :: struct {
+    spriteIndex: int,
+    itemTexture: rl.Texture2D,
+}
+
+HandState :: union #no_nil {
+    EmptyHand,
+    HandHoldingItem,
+}
+
+ANIMATION_LENGHT :: f32(0.4)
+ANIMATED_ROTATION :: 30 // in degrees
+HAND_X_OFFSET :: 200
+
+draw_hand :: proc(handTex: rl.Texture2D, animationT: f32, handState: HandState)
+{
+    scale := f32(1)
+    rotation := f32(0)
+
+    if animationT > rl.EPSILON {
+        progress := (ANIMATION_LENGHT - animationT) / ANIMATION_LENGHT 
+        t := progress * rl.PI
+        sinT := math.sin(t)
+
+        rotation = ANIMATED_ROTATION * sinT
+    }
+
+    // NOTE: the code drawing the hand sprite is the same
+    switch hand in handState {
+    case EmptyHand: 
+        // Bottom left corner of the texture
+        origin := rl.Vector2{0, SHEET_RESIZED_TILE_SIZE}
+
+        source := rl.Rectangle{SHEET_RESIZED_TILE_SIZE * f32(hand.spriteIndex), 0, SHEET_RESIZED_TILE_SIZE, SHEET_RESIZED_TILE_SIZE }
+
+        position := rl.Vector2{origin.x + HAND_X_OFFSET, WINDOW_HEIGHT}
+        dest := rl.Rectangle{position.x, position.y, SHEET_RESIZED_TILE_SIZE, SHEET_RESIZED_TILE_SIZE }
+
+        rl.DrawTexturePro(handTex, source, dest, origin, rotation, rl.WHITE)
+    case HandHoldingItem:
+        // Bottom left corner of the texture
+        origin := rl.Vector2{0, SHEET_RESIZED_TILE_SIZE}
+
+        source := rl.Rectangle{SHEET_RESIZED_TILE_SIZE * f32(hand.spriteIndex), 0, SHEET_RESIZED_TILE_SIZE, SHEET_RESIZED_TILE_SIZE }
+
+        position := rl.Vector2{origin.x + HAND_X_OFFSET, WINDOW_HEIGHT}
+        dest := rl.Rectangle{position.x, position.y, SHEET_RESIZED_TILE_SIZE, SHEET_RESIZED_TILE_SIZE }
+
+        rl.DrawTexturePro(handTex, source, dest, origin, rotation, rl.WHITE)
+        
+        // place the held item on the hand
+        x := HAND_X_OFFSET + SHEET_RESIZED_TILE_SIZE / 2 - 70
+        y := position.y - SHEET_RESIZED_TILE_SIZE + 20
+        itemPosition := rl.Vector2{x, y}
+
+        movedToOrigin := itemPosition - position
+        rotated := rl.Vector2Rotate(movedToOrigin, rotation * rl.DEG2RAD)
+        rotatedMovedBack := rotated + position
+
+        rl.DrawTexture(hand.itemTexture, i32(rotatedMovedBack.x), i32(rotatedMovedBack.y), rl.WHITE)
+    }
+}
+
 // Hm.. keeping this up to date as the state grows will be tricky,
 // can I maybe generate this? or say that if the actual leafs of  the state graph are vectors or scalars,
 // I can automatically inspect the type and interpolate them ??
@@ -154,7 +229,12 @@ interpolate_states :: proc(s0: ^GameState, s1: ^GameState, alpha: f32) -> GameSt
 
     newPitch := s0.cameraPitch * (1 - alpha) + s1.cameraPitch * alpha
 
-    return GameState {newPlayer, newPitch}
+    newIATimer:f32 = s0.interactAnimationTimer
+    if s0.interactAnimationTimer > s1.interactAnimationTimer {
+        newIATimer = s0.interactAnimationTimer * (1 - alpha) + s1.interactAnimationTimer * alpha
+    }
+
+    return GameState {newPlayer, newPitch, newIATimer}
 }
 
 get_camera_view_vector :: proc(state: GameState) -> rl.Vector3
@@ -248,7 +328,7 @@ get_gravity_force :: proc() -> Force
 get_initial_game_state :: proc() -> GameState
 {
     player := Player {position=PLAYER_INITIAL_POSITION, rotation=CAMERA_INITIAL_ROTATION, jumpTimer=0.0}
-    return GameState {player, 0}
+    return GameState {player, 0, 0.0}
 }
 
 
@@ -623,16 +703,38 @@ FixedUpdate :: proc(previousState: GameState, actions: InputActions, staticData:
         currentState.cameraPitch += rotationAmount
     }
 
-    if actions.interact {
+    interactOnCooldown := currentState.interactAnimationTimer > rl.EPSILON
+    if !interactOnCooldown && actions.interact {
         handle_interaction(itemInteraction, itemManager)
+        currentState.interactAnimationTimer = ANIMATION_LENGHT 
+    }
+    if interactOnCooldown {
+        currentState.interactAnimationTimer -= DT
     }
 
     return currentState
 }
 
+draw_held_item :: proc(texture: ^rl.RenderTexture2D, itemModel: rl.Model, t: f64)
+{
+    itemPos := rl.Vector3{3, 0, 0}
+    txCamera := rl.Camera3D { 
+        rl.Vector3(0),
+        itemPos,
+        rl.Vector3 {0.0, 1.0, 0.0},
+        45.0,
+        rl.CameraProjection.PERSPECTIVE }
+
+    rl.BeginTextureMode(texture^)
+    rl.ClearBackground(rl.BLANK)
+    rl.BeginMode3D(txCamera)
+        rl.DrawModelEx(itemModel, itemPos, rl.Vector3{0.0, 1.0, 1.0}, f32(t * 25.0), rl.Vector3(1.0), rl.GOLD)
+    rl.EndMode3D()
+    rl.EndTextureMode()
+}
 
 main :: proc() {
-    rl.InitWindow(1600, 900, "raylib [core] example - basic window")
+    rl.InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "ikea gamer")
 
     rl.DisableCursor()
     rl.SetTargetFPS(FPS)
@@ -652,68 +754,16 @@ main :: proc() {
         rl.CameraProjection.PERSPECTIVE }
 
     setup_camera(&camera, initialState)
-    
-    //lightingShader := rl.LoadShader("res/shaders/basic_lighting.vs", "res/shaders/basic_lighting.fs")
-    // collisions calculated by bounding box (AABB)
-    // axisAlignedScene := rl.LoadModel("res/scenes/ikeamaze.glb")
-    // //axisAlignedScene.materials[1].shader = lightingShader
-    // // I can overwrite the shared on a per-mesh basis even though its just one model!
-    // // the color from the original material is lost though... maybe painting vertex colors would work?
-    // // what about textures from blender?? I guess I can acess them somehow if I find out where they are bound
-    //
-    // colliders := make([]rl.BoundingBox, axisAlignedScene.meshCount+1)
-    // for mesh, inx in axisAlignedScene.meshes[:axisAlignedScene.meshCount] {
-    //     colliders[inx+1] = rl.GetMeshBoundingBox(mesh)
-    // }
-    // colliders[0] = rl.BoundingBox { rl.Vector3{-100, 0, -100}, rl.Vector3 {100, 0, 100} }
-    //
-    // // collisions calculated by triangle intersection (these are rotated objects and stuff where the aabb is not good enough)
-    // angledScene := rl.LoadModel("res/scenes/sceneAngled.glb")
-    // angledMeshes := angledScene.meshes[:angledScene.meshCount]
-    // //triangleCount := slice.reduce(angledMeshes, 0, proc(accumulator: int, mesh: rl.Mesh) -> int { return accumulator + int(mesh.triangleCount)})
-    // //angledSceneTriangles := make([]Triangle, triangleCount)
-    // angledSceneTriangles: [dynamic]Triangle
-    // 
-    // for mesh in angledMeshes {
-    //     vertexComponents := mesh.vertices[:3 * mesh.vertexCount]
-    //     vertices: [dynamic]Point3
-    //
-    //     for i := 0; i < len(vertexComponents); i += 3 {
-    //         vertex := Point3{ vertexComponents[i], vertexComponents[i+1], vertexComponents[i+2] }
-    //         append(&vertices, vertex)
-    //     }
-    //
-    //
-    //     indices := mesh.indices[:3 * mesh.triangleCount]
-    //     for i := 0; i < len(indices); i += 3 {
-    //         triangle: Triangle = {vertices[indices[i]], vertices[indices[i+1]], vertices[indices[i+2]]}
-    //         append(&angledSceneTriangles, triangle)
-    //     }
-    // }
 
-    
-    //image := rl.GenImageChecked(512, 512, 64, 64, rl.RED, rl.BLUE)
-    //texture := rl.LoadTextureFromImage(image)
-    
-    // playerModel := rl.LoadModelFromMesh(rl.GenMeshCube(1.0, 1.0, 1.0))
-    // playerBb := rl.GetModelBoundingBox(playerModel)
-    // player is a Model
-    // Model has a .transform matrix field
-    // 
-    // I want to 1. update player position on keyboard event
-    // 2. also player rotation (yaw only)
-    // this can all be encoded in the transform matrix, but when I want to draw the model, I only have functions that take position and or rotation as well. 
-    
-    // For the shader to work, I need to setup the texture sampler and use it in the fragment shader
-    // cube := rl.LoadModelFromMesh(rl.GenMeshCube(1.0, 1.0, 1.0))
-    // cube.materials[0].shader = lightingShader
-    // cube.materials[0].maps[rl.MaterialMapIndex.ALBEDO].texture = texture
+    handImage := rl.LoadImage("res/hands_sheet.png")
+    tiles := handImage.width / SHEET_TILE_SIZE
 
-    // colliders: [4]rl.BoundingBox
-    // colliders[0] = rl.BoundingBox { rl.Vector3{-5, 0, -5}, rl.Vector3 {5, 0, 5} }
-    // colliders[1] = position_bounding_box(playerBb, rl.Vector3{2.0, 2.0, 0.0})
-    // colliders[2] = position_bounding_box(playerBb, rl.Vector3{0.0, 4.0, 0.0})
-    // colliders[3] = position_bounding_box(playerBb, rl.Vector3{0.0, 2.0, 2.0})
+    imageAspectRatio := f32(handImage.width) / f32(handImage.height)
+    rl.ImageResize(&handImage, i32(SHEET_RESIZED_TILE_SIZE * imageAspectRatio), i32(SHEET_RESIZED_TILE_SIZE))
+    valid := rl.IsImageValid(handImage)
+
+    handTex := rl.LoadTextureFromImage(handImage)
+    heldItemTexture := rl.LoadRenderTexture(HELD_ITEM_SIZE, HELD_ITEM_SIZE)
 
     fixedUpdateRanLastFrame := false
     actions := InputActions{}
@@ -746,6 +796,9 @@ main :: proc() {
 
         rl.BeginDrawing()
             rl.ClearBackground(rl.RAYWHITE)
+            // rl.BeginTextureMode(heldItemTexture)
+            //     rl.ClearBackground(rl.WHITE)
+            // rl.EndTextureMode()
         
             rl.BeginMode3D(camera)
 
@@ -770,9 +823,18 @@ main :: proc() {
 
             rl.EndMode3D()
 
+            itemInHand := itemManager.activeItem != ItemIdInvalid
+            if itemInHand {
+                draw_held_item(&heldItemTexture, staticData.playerModel, rl.GetTime()) //todo get theright model
+            }
+
             rl.DrawFPS(50, 50)
-            itemInHand := fmt.tprintf("in hand: %d", itemManager.activeItem)
-            rl.DrawText(strings.clone_to_cstring(itemInHand), 50, 70, 20, rl.BLACK)
+
+            itemInHandMessage := fmt.tprintf("in hand: %d", itemManager.activeItem)
+            rl.DrawText(strings.clone_to_cstring(itemInHandMessage), 50, 70, 20, rl.BLACK)
+
+            handState: HandState = HandHoldingItem{1, heldItemTexture.texture} if itemInHand else EmptyHand{0}
+            draw_hand(handTex, renderState.interactAnimationTimer, handState)
 
             //debugMsg := fmt.tprintf("Keys: %i / %i", keysPickedUp, KEYS_NEEDED)
             //rl.DrawText(strings.clone_to_cstring(debugMsg), 10, 10, 20, rl.BLACK)
