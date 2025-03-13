@@ -90,6 +90,7 @@ GameState :: struct {
     cameraPitch: f32,
     interactAnimationTimer: f32,
     availableInteraction: ItemInteraction,
+    heldItemGhostPosition: rl.Vector3, //only valid if held item
 }
 
 StaticData :: struct {
@@ -122,7 +123,7 @@ setup_static_data :: proc() -> StaticData
     }
 
     // ground collider
-    colliders[0] = rl.BoundingBox { rl.Vector3{-100, 0, -100}, rl.Vector3 {100, 0, 100} }
+    colliders[0] = rl.BoundingBox { rl.Vector3{-100, -10, -100}, rl.Vector3 {100, 0, 100} }
 
     // collisions calculated by triangle intersection (these are rotated objects and stuff where the aabb is not good enough)
     angledScene := rl.LoadModel("res/scenes/sceneAngled.glb")
@@ -236,7 +237,9 @@ interpolate_states :: proc(s0: ^GameState, s1: ^GameState, alpha: f32) -> GameSt
         newIATimer = s0.interactAnimationTimer * (1 - alpha) + s1.interactAnimationTimer * alpha
     }
 
-    return GameState {newPlayer, newPitch, newIATimer, s0.availableInteraction}
+    ghostPosition := s0.heldItemGhostPosition * (1 - alpha) + s1.heldItemGhostPosition * alpha
+
+    return GameState {newPlayer, newPitch, newIATimer, s0.availableInteraction, ghostPosition}
 }
 
 get_camera_view_vector :: proc(state: GameState) -> rl.Vector3
@@ -330,14 +333,26 @@ get_gravity_force :: proc() -> Force
 get_initial_game_state :: proc() -> GameState
 {
     player := Player {position=PLAYER_INITIAL_POSITION, rotation=CAMERA_INITIAL_ROTATION, jumpTimer=0.0}
-    return GameState {player, 0, 0.0, {}}
+    return GameState {player, 0, 0.0, {}, {}}
 }
 
 
-position_bounding_box :: proc(defaultBb: rl.BoundingBox, position: rl.Vector3, scale :f32= 1.0) -> rl.BoundingBox {
+position_bounding_box :: proc(defaultBb: rl.BoundingBox, position: rl.Vector3) -> rl.BoundingBox {
+    bbWithMinAtOrigin := rl.BoundingBox{
+        rl.Vector3(0),
+        defaultBb.max - defaultBb.min
+    }
+
+    centerPoint := bbWithMinAtOrigin.max / 2.0
+    bbCenteredAroundOrigin := rl.BoundingBox {
+        bbWithMinAtOrigin.min - centerPoint,
+        bbWithMinAtOrigin.max - centerPoint
+    }
+
     return rl.BoundingBox { 
-        scale * defaultBb.min + position, 
-        scale * defaultBb.max + position }
+        bbCenteredAroundOrigin.min + position, 
+        bbCenteredAroundOrigin.max + position 
+    }
 }
 
 TryGetCollidingBox :: proc(playerBb: rl.BoundingBox, colliders: []rl.BoundingBox) -> (rl.BoundingBox, bool)
@@ -417,7 +432,12 @@ IntervalOverlap :: proc(first, second: Interval) -> (overlap: f32, orientation: 
 // This values is set to the maximum penetration amount that can happen in a single tick.
 NORMAL_CONFIDENCE_TRESHOLD :: SPEED * DT
 
-GetNormalOfCollidedFace :: proc(box1, box2: rl.BoundingBox, movementDirection: rl.Vector3) -> rl.Vector3
+IntersectionDetails :: struct {
+    collisionNormal: rl.Vector3,
+    penetrationDepth: f32,
+}
+
+get_intersection_details :: proc(box1, box2: rl.BoundingBox, movementDirection: rl.Vector3) -> IntersectionDetails
 {
     xOverlap, xOrientation := IntervalOverlap(Interval{box1.min.x, box1.max.x}, Interval{box2.min.x, box2.max.x})
     yOverlap, yOrientation := IntervalOverlap(Interval{box1.min.y, box1.max.y}, Interval{box2.min.y, box2.max.y})
@@ -434,15 +454,16 @@ GetNormalOfCollidedFace :: proc(box1, box2: rl.BoundingBox, movementDirection: r
         if penetrationDifference < NORMAL_CONFIDENCE_TRESHOLD
         {
             otherNormal := yNormal if yOverlap < zOverlap else zNormal
+            otherOverlap := min(yOverlap, zOverlap)
 
             movementDirNormalized := rl.Vector3Normalize(movementDirection)
             xCos := rl.Vector3DotProduct(movementDirNormalized, xNormal)
             otherCos := rl.Vector3DotProduct(movementDirNormalized, otherNormal)
 
-            return xNormal if xCos < otherCos else otherNormal
+            return { xNormal, xOverlap } if xCos < otherCos else { otherNormal, otherOverlap }
         }
 
-        return xNormal
+        return { xNormal, xOverlap }
     }
 
     if zOverlap < yOverlap && zOverlap < xOverlap
@@ -452,15 +473,16 @@ GetNormalOfCollidedFace :: proc(box1, box2: rl.BoundingBox, movementDirection: r
         if penetrationDifference < NORMAL_CONFIDENCE_TRESHOLD
         {
             otherNormal := yNormal if yOverlap < xOverlap else xNormal
+            otherOverlap := min(yOverlap, xOverlap)
 
             movementDirNormalized := rl.Vector3Normalize(movementDirection)
             zCos := rl.Vector3DotProduct(movementDirNormalized, zNormal)
             otherCos := rl.Vector3DotProduct(movementDirNormalized, otherNormal)
 
-            return zNormal if zCos < otherCos else otherNormal
+            return {zNormal, zOverlap} if zCos < otherCos else {otherNormal, otherOverlap}
         }
 
-        return zNormal
+        return {zNormal, zOverlap}
     }
 
     secondSmallest := zOverlap if zOverlap < xOverlap else xOverlap
@@ -468,15 +490,21 @@ GetNormalOfCollidedFace :: proc(box1, box2: rl.BoundingBox, movementDirection: r
     if penetrationDifference < NORMAL_CONFIDENCE_TRESHOLD
     {
         otherNormal := zNormal if zOverlap < xOverlap else xNormal
+        otherOverlap := min(zOverlap, xOverlap)
 
         movementDirNormalized := rl.Vector3Normalize(movementDirection)
         yCos := rl.Vector3DotProduct(movementDirNormalized, yNormal)
         otherCos := rl.Vector3DotProduct(movementDirNormalized, otherNormal)
 
-        return yNormal if yCos < otherCos else otherNormal
+        return {yNormal, yOverlap} if yCos < otherCos else {otherNormal, otherOverlap}
     }
 
-    return yNormal
+    return {yNormal, yOverlap}
+}
+
+GetNormalOfCollidedFace :: proc(box1, box2: rl.BoundingBox, movementDirection: rl.Vector3) -> rl.Vector3
+{
+    return get_intersection_details(box1, box2, movementDirection).collisionNormal
 }
 
 GetWallSlidingDirection :: proc(playerBox, collisioxBox: rl.BoundingBox, movementDirection: rl.Vector3) -> rl.Vector3
@@ -601,23 +629,30 @@ ApplyVerticalMovement :: proc(originalState: GameState, actions: InputActions, c
     return newState
 }
 
-handle_interaction :: proc(itemInteraction: ItemInteraction, itemManager: ^ItemManager)
+handle_interaction :: proc(state: GameState, itemInteraction: ItemInteraction, itemManager: ^ItemManager) -> GameState
 {
+    stateAfterInteraction := state
+
     switch interaction in itemInteraction {
     case InteractableItem:
-        pickup_item(itemManager, interaction.itemId)
+        item := pickup_item(itemManager, interaction.itemId)
+        stateAfterInteraction.heldItemGhostPosition = item.position
 
     case PlaceableInCart:
 
     case PlaceableOnGround:
+        fmt.println("POG!! %x", interaction)
+        place_active_item(itemManager, interaction.spot)
 
     case NoInteraction:
     }
+
+    return stateAfterInteraction
 }
 
-INTERACTION_RADIUS :: f32(2.0 + PLAYER_COLLIDER_RADIUS)
+INTERACTION_RADIUS :: f32(5.0 + PLAYER_COLLIDER_RADIUS)
 
-get_possible_item_interaction :: proc(state: GameState, itemManager: ^ItemManager) -> ItemInteraction
+get_possible_item_interaction :: proc(state: GameState, itemManager: ^ItemManager, collisionContext: CollisionContext) -> ItemInteraction
 {
     viewRay := rl.Ray{state.player.position, get_camera_view_vector(state)}
 
@@ -643,6 +678,58 @@ get_possible_item_interaction :: proc(state: GameState, itemManager: ^ItemManage
     }
 
     // the player is holding an item in hand
+    heldItem := get_active_item(itemManager).?
+    itemBox := itemManager.itemColliders[heldItem.id] // not positioned properly yet
+
+    // find the spot in the scene where we want to put it
+    anySpot := false
+    spotToPlaceItem: rl.Vector3
+    minPlacementDistance := INTERACTION_RADIUS + rl.EPSILON
+    for box in collisionContext.sceneColliders {
+        collision := rl.GetRayCollisionBox(viewRay, box)
+        if collision.hit && collision.distance < minPlacementDistance {
+            spotToPlaceItem = collision.point
+            minPlacementDistance = collision.distance
+
+            anySpot = true
+        }
+    }
+
+    if !anySpot {
+        return NoInteraction{}
+    }
+
+    itemBoxAtSpot := position_bounding_box(itemBox, spotToPlaceItem)
+    ghostMovement := linalg.normalize(spotToPlaceItem - state.heldItemGhostPosition)
+
+    normalsOfIntersectedFaces: [dynamic]IntersectionDetails
+    for box in collisionContext.sceneColliders {
+        collision := rl.CheckCollisionBoxes(itemBoxAtSpot, box)
+        collision or_continue
+
+        details := get_intersection_details(itemBoxAtSpot, box, ghostMovement)
+        append(&normalsOfIntersectedFaces, details)
+    }
+
+    correctedPosition := spotToPlaceItem
+    for collision in normalsOfIntersectedFaces {
+        correctedPosition += collision.collisionNormal * (collision.penetrationDepth + rl.EPSILON)
+    }
+
+    boxAtCorrectedSpot := position_bounding_box(itemBox, correctedPosition)
+
+    ok := true
+    for box in collisionContext.sceneColliders {
+        ok = !rl.CheckCollisionBoxes(boxAtCorrectedSpot, box)
+        ok or_break
+    }
+
+    return PlaceableOnGround{ok, correctedPosition}
+
+
+
+    // get all colliding boxes (and triangles) with collision normals
+
     // get the ray again
     // get intersection of the ray with scene geometry - that is the place where you want to place the item
     // check if the item can be placed there - bounding box check with correction?? TBD
@@ -655,7 +742,7 @@ get_possible_item_interaction :: proc(state: GameState, itemManager: ^ItemManage
     // and return the corresponding result
 
     //TODO
-    return NoInteraction{}
+    //return NoInteraction{}
 }
 
 create_collision_context :: proc(staticData: ^StaticData, itemManager: ^ItemManager) -> CollisionContext
@@ -674,10 +761,16 @@ create_collision_context :: proc(staticData: ^StaticData, itemManager: ^ItemMana
 
 FixedUpdate :: proc(previousState: GameState, actions: InputActions, staticData: ^StaticData, itemManager: ^ItemManager) -> GameState
 {
-    collisionContext := create_collision_context(staticData, itemManager)
-    availableInteraction := get_possible_item_interaction(previousState, itemManager)
+    currentState := previousState
 
-    currentState := ApplyVerticalMovement(previousState, actions, collisionContext)
+    collisionContext := create_collision_context(staticData, itemManager)
+    availableInteraction := get_possible_item_interaction(currentState, itemManager, collisionContext)
+
+    if pog, ok := availableInteraction.(PlaceableOnGround); ok {
+        currentState.heldItemGhostPosition = pog.spot
+    }
+
+    currentState = ApplyVerticalMovement(currentState, actions, collisionContext)
 
     move := actions.movement
     if .Forward in move || .Backward in move {
@@ -713,7 +806,7 @@ FixedUpdate :: proc(previousState: GameState, actions: InputActions, staticData:
         currentState.availableInteraction = availableInteraction
 
         if actions.interact && type_of(availableInteraction) != NoInteraction {
-            handle_interaction(availableInteraction, itemManager)
+            currentState = handle_interaction(currentState, availableInteraction, itemManager)
 
             // put interact on cooldown
             currentState.interactAnimationTimer = ANIMATION_LENGHT 
@@ -828,6 +921,15 @@ main :: proc() {
                     rl.DrawModel(itemManager.itemModels[item.descriptor.type], item.position, 1.0, rl.GOLD)
                 }
 
+                activeItem := get_active_item(&itemManager)
+                if item, ok := activeItem.?; ok {
+                    itemBb := position_bounding_box(itemManager.itemColliders[item.id], renderState.heldItemGhostPosition)
+                    rl.DrawBoundingBox(itemBb, rl.WHITE)
+                    //model := itemManager.itemModels[item.descriptor.type]
+                    //rl.DrawModel(model, renderState.heldItemGhostPosition, 1.0, rl.BROWN)
+
+                    //rl.DrawSphere(renderState.heldItemGhostPosition, 0.25, rl.BROWN)
+                }
             rl.EndMode3D()
 
             itemInHand := itemManager.activeItem != ItemIdInvalid

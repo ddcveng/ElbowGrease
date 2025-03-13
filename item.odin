@@ -78,6 +78,15 @@ can_pickup_item :: proc(manager: ^ItemManager) -> bool
     return manager.activeItem == ItemIdInvalid
 }
 
+get_active_item :: proc(manager: ^ItemManager) -> Maybe(Item)
+{
+    if manager.activeItem == ItemIdInvalid {
+        return nil
+    } 
+
+    return manager.items[manager.activeItem]
+}
+
 create_item :: proc(manager: ^ItemManager, itemPosition: Point3, itemDescriptor: ItemDescriptor) -> Item
 {
     if manager.itemIdCounter >= MAX_ITEMS {
@@ -97,22 +106,29 @@ create_item :: proc(manager: ^ItemManager, itemPosition: Point3, itemDescriptor:
 // picked up    no collisions, can be placed or put in the cart on interact (only 1 item picked up at a time)
 // and in cart  no collitions, cannot be picked up - final state, can only be put here if the shopping list contains an item like this
 
-pickup_item :: proc(manager: ^ItemManager, id: ItemId)
+pickup_item :: proc(manager: ^ItemManager, id: ItemId) -> Item
 {
     if manager.activeItem != ItemIdInvalid {
         panic("Cannot pickup 2 items at the same time")
     }
 
-    if manager.items[id].id == ItemIdInvalid {
+    item := manager.items[id]
+    if item.id == ItemIdInvalid {
         panic("invalid item id")
     }
 
     manager.activeItem = id
+    return item
 }
 
-place_item :: proc(manager: ^ItemManager, id: ItemId, position: Point3) 
+place_active_item :: proc(manager: ^ItemManager, position: Point3) 
 {
+    assert(manager.activeItem != ItemIdInvalid)
 
+    manager.items[manager.activeItem].position = position
+    manager.itemColliders[manager.activeItem] = position_bounding_box(manager.itemColliders[manager.activeItem], position)
+
+    manager.activeItem = ItemIdInvalid
 }
 
 get_placed_items :: proc(manager: ^ItemManager) -> []Item
@@ -138,6 +154,7 @@ InteractableItem :: struct {
 
 PlaceableOnGround :: struct {
     spotValid: bool, // the player is aiming at a spot on the ground, but the spot may be invalid if the item cannot fit there
+    spot: rl.Vector3,
 }
 
 PlaceableInCart :: struct {
