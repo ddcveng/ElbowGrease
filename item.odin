@@ -1,7 +1,6 @@
 package jamgame
 
 import rl "vendor:raylib"
-import "core:container/small_array"
 import "core:slice"
 
 ItemType :: enum 
@@ -33,16 +32,6 @@ Item :: struct
     id: ItemId,
     position: Point3,
     descriptor: ItemDescriptor,
-}
-
-ITEMS_TO_BUY :: 8
-ShoppingCart :: struct 
-{
-    position: Point3,
-    connectedToPlayer: bool,
-
-    shoppingList: [ITEMS_TO_BUY]ItemDescriptor,
-    items: small_array.Small_Array(ITEMS_TO_BUY, ItemId)
 }
 
 MAX_ITEMS :: 128
