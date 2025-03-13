@@ -105,8 +105,9 @@ StaticData :: struct {
 
 setup_static_data :: proc() -> StaticData
 {
-    // @nocheckin having the player be a non-cube/ sphere will require changes to the collision detection logic
-    playerModel := rl.LoadModelFromMesh(rl.GenMeshCube(1.0, 1.0, 1.0))
+    // @collision having the player be a non-cube/ sphere may require changes to the collision detection logic
+    // probably boxes work fine, but the triangle radius might not be sufficient
+    playerModel := rl.LoadModelFromMesh(rl.GenMeshCube(1.0, 2.0, 1.0))
     playerBoundingBox := rl.GetModelBoundingBox(playerModel)
 
     axisAlignedScene := rl.LoadModel("res/scenes/ikeamaze.glb")
@@ -724,7 +725,8 @@ FixedUpdate :: proc(previousState: GameState, actions: InputActions, staticData:
     return currentState
 }
 
-draw_held_item :: proc(texture: ^rl.RenderTexture2D, itemModel: rl.Model, t: f64)
+ITEM_ROTATION_SPEED :: 25.0
+draw_held_item_to_texture :: proc(destinationTexture: ^rl.RenderTexture2D, itemModel: rl.Model, t: f64)
 {
     itemPos := rl.Vector3{3, 0, 0}
     txCamera := rl.Camera3D { 
@@ -734,10 +736,10 @@ draw_held_item :: proc(texture: ^rl.RenderTexture2D, itemModel: rl.Model, t: f64
         45.0,
         rl.CameraProjection.PERSPECTIVE }
 
-    rl.BeginTextureMode(texture^)
+    rl.BeginTextureMode(destinationTexture^)
     rl.ClearBackground(rl.BLANK)
     rl.BeginMode3D(txCamera)
-        rl.DrawModelEx(itemModel, itemPos, rl.Vector3{0.0, 1.0, 1.0}, f32(t * 25.0), rl.Vector3(1.0), rl.GOLD)
+        rl.DrawModelEx(itemModel, itemPos, rl.Vector3{0.0, 1.0, 1.0}, f32(t * ITEM_ROTATION_SPEED), rl.Vector3(1.0), rl.GOLD)
     rl.EndMode3D()
     rl.EndTextureMode()
 }
@@ -805,10 +807,6 @@ main :: proc() {
 
         rl.BeginDrawing()
             rl.ClearBackground(rl.RAYWHITE)
-            // rl.BeginTextureMode(heldItemTexture)
-            //     rl.ClearBackground(rl.WHITE)
-            // rl.EndTextureMode()
-        
             rl.BeginMode3D(camera)
 
                 rl.DrawPlane(rl.Vector3{ 0.0, 0.0, 0.0}, rl.Vector2{ 200, 200 }, rl.GREEN) // Draw ground
@@ -827,14 +825,15 @@ main :: proc() {
                 // }
 
                 for item in get_placed_items(&itemManager) {
-                    rl.DrawModel(staticData.playerModel, item.position, 1.0, rl.GOLD) //TODO draw the right model...
+                    rl.DrawModel(itemManager.itemModels[item.descriptor.type], item.position, 1.0, rl.GOLD)
                 }
 
             rl.EndMode3D()
 
             itemInHand := itemManager.activeItem != ItemIdInvalid
             if itemInHand {
-                draw_held_item(&heldItemTexture, staticData.playerModel, rl.GetTime()) //todo get theright model
+                item := itemManager.items[itemManager.activeItem]
+                draw_held_item_to_texture(&heldItemTexture, itemManager.itemModels[item.descriptor.type], rl.GetTime())
             }
 
             rl.DrawFPS(50, 50)
