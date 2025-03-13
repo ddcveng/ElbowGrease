@@ -11,15 +11,8 @@ FPS :: 60 // Frames per second
 TPS :: 30 // Simulation tics per seconds
 DT :: 1.0 / TPS // Delta time for the simulation
 
-LEVEL_WIDTH :: 10
-LEVEL_HEIGHT :: 10
-
-TILE_SIZE :: 3.0
-
-LEVEL_POSITION_X_START :: -LEVEL_WIDTH * TILE_SIZE / 2.0
-LEVEL_POSITION_Z_START :: -LEVEL_HEIGHT * TILE_SIZE / 2.0
-
-PLAYER_INITIAL_POSITION :: rl.Vector3{-43.0, 2.0, -3.0}
+PLAYER_HEIGHT :: 2.0
+PLAYER_INITIAL_POSITION :: rl.Vector3{-43.0, 1.2, -3.0}
 CAMERA_DISTANCE :: f32(6)
 CAMERA_INITIAL_ROTATION :: f32(0)
 CAMERA_HEIGHT_DIFFERENCE :: f32(1.5)
@@ -31,15 +24,15 @@ SHEET_RESIZED_TILE_SIZE :: f32(WINDOW_HEIGHT / 2)
 
 HELD_ITEM_SIZE :: WINDOW_HEIGHT / 6.0
 
+GRAVITY :: 10.0
+SPEED :: 7.0
+SENSITIVITY :: 5.0 // for mouse rotation
+JUMP_FORCE :: 30.0
+
+VELOCITY_DECAY_MULTIPLIER :: 0.9
+
 Point3 :: [3]f32
 Triangle :: [3]Point3
-
-pos2LevelIndex :: proc(position: rl.Vector3) -> (int, int) {
-    xInx := int(math.round((position.x - LEVEL_POSITION_X_START) / TILE_SIZE))
-    zInx := int(math.round((position.z - LEVEL_POSITION_Z_START) / TILE_SIZE))
-
-    return zInx, xInx
-}
 
 Pivot :: enum {
     center = 0,
@@ -62,11 +55,10 @@ Rad :: f32
 Deg :: f32
 
 Player :: struct {
-    position: rl.Vector3, // implicitly pivot.center
+    rigidBody: RigidBody,
+    //position: rl.Vector3, // implicitly pivot.center
     rotation: Deg, // This is currenlty in degreees, since the rendering code takes it in degrees...
     // most of the calculations require this to be radians though so it kinda sucks
-
-    jumpTimer: f32,
 }
 
 // Distance should only change when we would intersect a wall. IN this case zoom the camera in a little to avoid it.
@@ -91,6 +83,7 @@ GameState :: struct {
     interactAnimationTimer: f32,
     availableInteraction: ItemInteraction,
     heldItemGhostPosition: rl.Vector3, //only valid if held item
+    shoppingCart: ShoppingCart,
 }
 
 StaticData :: struct {
@@ -102,13 +95,15 @@ StaticData :: struct {
 
     sceneAxisAlignedColliders: []rl.BoundingBox,
     sceneTriangleColliders: []Triangle,
+
+    shoppingCart: ShoppingCartStaticData,
 }
 
 setup_static_data :: proc() -> StaticData
 {
     // @collision having the player be a non-cube/ sphere may require changes to the collision detection logic
     // probably boxes work fine, but the triangle radius might not be sufficient
-    playerModel := rl.LoadModelFromMesh(rl.GenMeshCube(1.0, 2.0, 1.0))
+    playerModel := rl.LoadModelFromMesh(rl.GenMeshCube(1.0, PLAYER_HEIGHT, 1.0))
     playerBoundingBox := rl.GetModelBoundingBox(playerModel)
 
     axisAlignedScene := rl.LoadModel("res/scenes/ikeamaze.glb")
@@ -149,8 +144,16 @@ setup_static_data :: proc() -> StaticData
         }
     }
 
-    return StaticData {playerModel, playerBoundingBox, axisAlignedScene, angledScene, colliders, angledSceneTriangles[:]}
+    cartModel := rl.LoadModelFromMesh(rl.GenMeshCone(1.0, 1.0, 5))
+    cartBb := rl.GetModelBoundingBox(cartModel)
+    shoppingCartData := ShoppingCartStaticData { cartModel, cartBb, { ItemDescriptor{.Table, .Huge} } }
 
+    return StaticData {
+        playerModel, playerBoundingBox, 
+        axisAlignedScene, angledScene, 
+        colliders, angledSceneTriangles[:],
+        shoppingCartData
+    }
 }
 
 EmptyHand :: struct {
@@ -224,11 +227,13 @@ draw_hand :: proc(handTex: rl.Texture2D, animationT: f32, handState: HandState)
 // can I maybe generate this? or say that if the actual leafs of  the state graph are vectors or scalars,
 // I can automatically inspect the type and interpolate them ??
 interpolate_states :: proc(s0: ^GameState, s1: ^GameState, alpha: f32) -> GameState {
-    newPlayerPos := s0.player.position * (1 - alpha)\
-        + s1.player.position * alpha
+    newPlayerPos := s0.player.rigidBody.position * (1 - alpha)\
+        + s1.player.rigidBody.position * alpha
     newPlayerRotation := s0.player.rotation * (1 - alpha)\
         + s1.player.rotation * alpha
-    newPlayer := Player {newPlayerPos, newPlayerRotation, s0.player.jumpTimer}
+    newPlayer := s0.player
+    newPlayer.rigidBody.position = newPlayerPos
+    newPlayer.rotation = newPlayerRotation
 
     newPitch := s0.cameraPitch * (1 - alpha) + s1.cameraPitch * alpha
 
@@ -239,7 +244,11 @@ interpolate_states :: proc(s0: ^GameState, s1: ^GameState, alpha: f32) -> GameSt
 
     ghostPosition := s0.heldItemGhostPosition * (1 - alpha) + s1.heldItemGhostPosition * alpha
 
-    return GameState {newPlayer, newPitch, newIATimer, s0.availableInteraction, ghostPosition}
+    cartPosition := s0.shoppingCart.position * (1 - alpha) + s1.shoppingCart.position * alpha
+    newCart := s0.shoppingCart
+    newCart.position = cartPosition
+
+    return GameState {newPlayer, newPitch, newIATimer, s0.availableInteraction, ghostPosition, newCart}
 }
 
 get_camera_view_vector :: proc(state: GameState) -> rl.Vector3
@@ -256,7 +265,7 @@ get_camera_view_vector :: proc(state: GameState) -> rl.Vector3
 //first person camera
 setup_camera :: proc(camera: ^rl.Camera, state: GameState)
 {
-    camera.position = state.player.position
+    camera.position = state.player.rigidBody.position
     camera.target = camera.position + get_camera_view_vector(state)
 }
 
@@ -303,9 +312,6 @@ get_movement_direction_from_input :: proc() -> rl.Vector2 {
     return movement_direction
 }
 
-GRAVITY :: 10.0
-SPEED :: 5.0
-SENSITIVITY :: 5.0
 
 get_forward_input_force :: proc(player: Player) -> Force
 {
@@ -330,10 +336,13 @@ get_gravity_force :: proc() -> Force
     return Force {rl.Vector3{0, -GRAVITY, 0}, false}
 } 
 
-get_initial_game_state :: proc() -> GameState
+get_initial_game_state :: proc(staticData: ^StaticData) -> GameState
 {
-    player := Player {position=PLAYER_INITIAL_POSITION, rotation=CAMERA_INITIAL_ROTATION, jumpTimer=0.0}
-    return GameState {player, 0, 0.0, {}, {}}
+    playerBody := RigidBody {PLAYER_INITIAL_POSITION, rl.GetModelBoundingBox(staticData.playerModel), {}}
+    player := Player {rigidBody=playerBody, rotation=CAMERA_INITIAL_ROTATION}
+    cart := ShoppingCart {PLAYER_INITIAL_POSITION + {8.0, 0.0, 0.0}, false, {}}
+
+    return GameState {player, 0, 0.0, {}, {}, cart}
 }
 
 
@@ -386,28 +395,30 @@ TryGetCollidingTriangleNormal :: proc(playerPosition: Point3, triangles: []Trian
     return {}, false
 }
 
-CheckAnyCollision :: proc(player: Player, collisionContext: CollisionContext) -> bool
+check_any_collision :: proc(rigidBody: RigidBody, collisionContext: CollisionContext) -> bool
 {
-    playerCollider := position_bounding_box(collisionContext.playerCollider, player.position)
-
-    box, collision := TryGetCollidingBox(playerCollider, collisionContext.sceneColliders)
+    bodyBox := position_bounding_box(rigidBody.boundingBox, rigidBody.position)
+    box, collision := TryGetCollidingBox(bodyBox, collisionContext.sceneColliders)
     if collision {
         return true
     }
 
     //playerPosition := (playerBb.max - playerBb.min) / 2
-    n, triCollision := TryGetCollidingTriangleNormal(player.position, collisionContext.sceneTriangleColliders)
+    n, triCollision := TryGetCollidingTriangleNormal(rigidBody.position, collisionContext.sceneTriangleColliders)
     return triCollision
 }
-// CheckAnyCollision :: proc(playerBb: rl.BoundingBox, colliders: []rl.BoundingBox, triangles: []Triangle) -> bool
+
+// CheckAnyCollision :: proc(player: Player, collisionContext: CollisionContext) -> bool
 // {
-//     box, collision := TryGetCollidingBox(playerBb, colliders)
+//     playerCollider := position_bounding_box(collisionContext.playerCollider, player.position)
+//
+//     box, collision := TryGetCollidingBox(playerCollider, collisionContext.sceneColliders)
 //     if collision {
 //         return true
 //     }
 //
-//     playerPosition := (playerBb.max - playerBb.min) / 2
-//     n, triCollision := TryGetCollidingTriangleNormal(playerPosition, triangles)
+//     //playerPosition := (playerBb.max - playerBb.min) / 2
+//     n, triCollision := TryGetCollidingTriangleNormal(player.position, collisionContext.sceneTriangleColliders)
 //     return triCollision
 // }
 
@@ -510,22 +521,28 @@ GetNormalOfCollidedFace :: proc(box1, box2: rl.BoundingBox, movementDirection: r
 GetWallSlidingDirection :: proc(playerBox, collisioxBox: rl.BoundingBox, movementDirection: rl.Vector3) -> rl.Vector3
 {
     collisionNormal := GetNormalOfCollidedFace(playerBox, collisioxBox, movementDirection)
-    leftSlidingDir := collisionNormal.zyx
-    rightSlidingDir := -collisionNormal.zyx
+    
+    directionDotNormal := linalg.dot(movementDirection, collisionNormal)
+    projectedDirection := movementDirection - collisionNormal * directionDotNormal
 
-    movementDirNormalized := rl.Vector3Normalize(movementDirection)
-    cosLeft := rl.Vector3DotProduct(movementDirNormalized, leftSlidingDir)
-    cosRight := rl.Vector3DotProduct(movementDirNormalized, rightSlidingDir)
-    if cosLeft - cosRight > rl.EPSILON
-    {
-        return leftSlidingDir
-    }
-    else if cosRight - cosLeft > rl.EPSILON
-    {
-        return rightSlidingDir
-    }
+    return projectedDirection
 
-    return movementDirection
+    // leftSlidingDir := collisionNormal.zyx
+    // rightSlidingDir := -collisionNormal.zyx
+    //
+    // movementDirNormalized := rl.Vector3Normalize(movementDirection)
+    // cosLeft := rl.Vector3DotProduct(movementDirNormalized, leftSlidingDir)
+    // cosRight := rl.Vector3DotProduct(movementDirNormalized, rightSlidingDir)
+    // if cosLeft - cosRight > rl.EPSILON
+    // {
+    //     return leftSlidingDir
+    // }
+    // else if cosRight - cosLeft > rl.EPSILON
+    // {
+    //     return rightSlidingDir
+    // }
+    //
+    // return movementDirection
 }
 
 Force :: struct {
@@ -535,98 +552,118 @@ Force :: struct {
 
 ForceSource :: enum { InputForward, InputSideways, Gravity } 
 
-MoveAndSlide :: proc(originalState: GameState, movementDirection: rl.Vector3, collisionContext: CollisionContext) -> GameState
-{
-    newState := originalState
-    newState.player.position += movementDirection * SPEED * DT
+// TODO; this is weird, I have to position the bb every time I want to use it...
+RigidBody :: struct {
+    position: Point3,
+    boundingBox: rl.BoundingBox,
+    velocity: rl.Vector3,
+}
 
-    playerBbAfterMove := position_bounding_box(collisionContext.playerCollider, newState.player.position)
+update_rigid_body :: proc(
+    body: RigidBody,
+    collisionContext: CollisionContext,
+    instantVelocity: rl.Vector3 = rl.Vector3(0)) -> RigidBody
+{
+    newBody := body
+
+    gravity := rl.Vector3 {0.0, -1.0, 0.0} * GRAVITY
+    velocity := newBody.velocity + gravity + instantVelocity 
+
+    verticalVelocity := rl.Vector3{0, velocity.y, 0}
+    newBody.position += verticalVelocity * DT
+
+    boxVertical := position_bounding_box(newBody.boundingBox, newBody.position)
+    cBox, collision := TryGetCollidingBox(boxVertical, collisionContext.sceneColliders)
+    if collision {
+        details := get_intersection_details(boxVertical, cBox, linalg.normalize(verticalVelocity))
+
+        newBody.position += details.collisionNormal * details.penetrationDepth + rl.EPSILON
+        newBody.velocity.y = 0
+    }
+
+    if abs(velocity.x) < rl.EPSILON && abs(velocity.y) < rl.EPSILON {
+        return newBody
+    }
+
+    horizontalVelocity := rl.Vector3 {velocity.x, 0.0, velocity.z}
+    horizontalBodyBefore := newBody
+    horizontalBodyBefore.velocity = horizontalVelocity
+
+    horizontalBodyAfter := move_and_slide(horizontalBodyBefore, collisionContext)
+
+    newBody.position = horizontalBodyAfter.position
+    newBody.velocity *= VELOCITY_DECAY_MULTIPLIER
+
+    return newBody
+}
+
+move_and_slide :: proc(rigidBody: RigidBody, collisionContext: CollisionContext) -> RigidBody
+{
+    if abs(rigidBody.velocity.x) < rl.EPSILON \
+    && abs(rigidBody.velocity.y) < rl.EPSILON \
+    && abs(rigidBody.velocity.z) < rl.EPSILON {
+        return rigidBody
+    }
+
+    body := rigidBody
+    body.position += body.velocity * DT
+    originalBodyDirection := linalg.normalize(rigidBody.velocity)
+    originalSpeed := linalg.length(rigidBody.velocity)
+
+    playerBbAfterMove := position_bounding_box(body.boundingBox, body.position)
     collidedBox, collision := TryGetCollidingBox(playerBbAfterMove, collisionContext.sceneColliders)
     if collision
     {
-        newState = originalState
-        redirected := GetWallSlidingDirection(playerBbAfterMove, collidedBox, movementDirection)
+        body = rigidBody
+        redirected := GetWallSlidingDirection(playerBbAfterMove, collidedBox, originalBodyDirection)
 
-        newState.player.position += redirected * SPEED * DT
+        body.position += redirected * originalSpeed * DT
 
-        rCollision := CheckAnyCollision(newState.player, collisionContext)
+        rCollision := check_any_collision(body, collisionContext)
         if rCollision {
             fmt.printfln("redirected: %f, %f, %f", redirected.x, redirected.y, redirected.z)
-            return originalState
+            return rigidBody
         }
     }
 
     // check collision with triangles 
     // find the normal of the triangle 
-    triangleNormal, triCollision := TryGetCollidingTriangleNormal(newState.player.position, collisionContext.sceneTriangleColliders)
+    triangleNormal, triCollision := TryGetCollidingTriangleNormal(body.position, collisionContext.sceneTriangleColliders)
     if triCollision {
-        newState = originalState
+        body = rigidBody
 
-        directionDotNormal := linalg.dot(movementDirection, triangleNormal)
+        directionDotNormal := linalg.dot(originalBodyDirection, triangleNormal)
         if directionDotNormal < 0.0 {
             fmt.printfln("sliding along direction: %f, %f, %f", triangleNormal.x, triangleNormal.y, triangleNormal.z)
-            projectedDirection := movementDirection - triangleNormal * directionDotNormal
+            projectedDirection := originalBodyDirection - triangleNormal * directionDotNormal
 
-            newState.player.position += projectedDirection * SPEED * DT
+            body.position += projectedDirection * originalSpeed * DT
 
-            slideCollision := CheckAnyCollision(newState.player, collisionContext)
+            slideCollision := check_any_collision(body, collisionContext)
             if slideCollision {
                 fmt.printfln("slide failed in direction: %f, %f, %f", projectedDirection.x, projectedDirection.y, projectedDirection.z)
-                return originalState
+                return rigidBody
             }
         }
     }
 
-    return newState
+    return body
 }
 
-JUMP_HEIGHT :: 5.0
-JUMP_DURATION_SECONDS :: 0.3
-JUMP_SPEED :: JUMP_HEIGHT / JUMP_DURATION_SECONDS
-ApplyVerticalMovement :: proc(originalState: GameState, actions: InputActions, collisionContext: CollisionContext) -> GameState
+ray_x_scene :: proc (ray: rl.Ray, collisionContext: CollisionContext) -> rl.RayCollision
 {
-    // if any jump force remains, decay it and apply it
-    //      if jump causes collision, stop the jump force at once
-    jumpTimer := originalState.player.jumpTimer
-    if jumpTimer > rl.EPSILON {
-        jumpDt := min(jumpTimer, DT) 
+    minHitDistance := math.inf_f32(1)
+    closestHit: rl.RayCollision
 
-        newState := originalState
-        newState.player.position += rl.Vector3{0, 1, 0} * JUMP_SPEED * jumpDt
-
-        collision := CheckAnyCollision(newState.player, collisionContext)
-        if collision {
-            collidedState := originalState
-            collidedState.player.jumpTimer = 0
-
-            return collidedState
+    for box in collisionContext.sceneColliders {
+        collision := rl.GetRayCollisionBox(ray, box)
+        if collision.hit && collision.distance < minHitDistance {
+            minHitDistance = collision.distance
+            closestHit = collision
         }
-
-        newState.player.jumpTimer -= DT // I don't care the last iteration will make it negative
-        return newState
-    }
-    
-    // always to to apply gravity and if we collide with something, we know we are grounded.
-    // if grounded, check for jump inputs
-    gravityPositionDelta := rl.Vector3{0, -1, 0} * GRAVITY * DT
-    newState := originalState
-    newState.player.position += gravityPositionDelta
-
-    collision := CheckAnyCollision(newState.player, collisionContext)
-    if collision {
-        groundedState := originalState
-
-        if actions.jump {
-            startJumpState := groundedState
-            startJumpState.player.jumpTimer = JUMP_DURATION_SECONDS
-
-            return startJumpState
-        }
-
-        return groundedState
     }
 
-    return newState
+    return closestHit    
 }
 
 handle_interaction :: proc(state: GameState, itemInteraction: ItemInteraction, itemManager: ^ItemManager) -> GameState
@@ -641,7 +678,6 @@ handle_interaction :: proc(state: GameState, itemInteraction: ItemInteraction, i
     case PlaceableInCart:
 
     case PlaceableOnGround:
-        fmt.println("POG!! %x", interaction)
         place_active_item(itemManager, interaction.spot)
 
     case NoInteraction:
@@ -654,7 +690,7 @@ INTERACTION_RADIUS :: f32(5.0 + PLAYER_COLLIDER_RADIUS)
 
 get_possible_item_interaction :: proc(state: GameState, itemManager: ^ItemManager, collisionContext: CollisionContext) -> ItemInteraction
 {
-    viewRay := rl.Ray{state.player.position, get_camera_view_vector(state)}
+    viewRay := rl.Ray{state.player.rigidBody.position, get_camera_view_vector(state)}
 
     if can_pickup_item(itemManager) {
         interactableItems := get_placed_items(itemManager)
@@ -770,23 +806,61 @@ FixedUpdate :: proc(previousState: GameState, actions: InputActions, staticData:
         currentState.heldItemGhostPosition = pog.spot
     }
 
-    currentState = ApplyVerticalMovement(currentState, actions, collisionContext)
-
     move := actions.movement
+    velocityFromActions: rl.Vector3
+
     if .Forward in move || .Backward in move {
-        direction :f32= 1 if .Forward in move else -1
+        direction:f32 = 1 if .Forward in move else -1
         forwardVector := get_player_forward(previousState.player)
         forward3d := rl.Vector3 { forwardVector.x, 0, forwardVector.y } * direction
 
-        currentState = MoveAndSlide(currentState, forward3d, collisionContext)
+        velocityFromActions += forward3d
     } 
     if .Left in move || .Right in move {
-        direction :f32= 1 if .Right in move else -1
+        direction:f32 = 1 if .Right in move else -1
         sidewaysVector := get_player_sideways(previousState.player)
         sideways3d := rl.Vector3 { sidewaysVector.x, 0, sidewaysVector.y } * direction
 
-        currentState = MoveAndSlide(currentState, sideways3d, collisionContext)
+        velocityFromActions += sideways3d
     }
+
+    //velocityFromActions = linalg.normalize(velocityFromActions)
+    velocityFromActions *= SPEED
+
+    // for jumping find ray scene hit to ground. if its close enough say we are grounded.
+    // if grounded and action.jump, add vertical force up to the body, not to the velocity from actions!
+    rayToGround := rl.Ray{ currentState.player.rigidBody.position, rl.Vector3{0.0, -1.0, 0.0} }
+    groundHit := ray_x_scene(rayToGround, collisionContext)
+    playerGrounded := true//groundHit.hit && groundHit.distance < 1.0 + 0.001
+
+    if playerGrounded && actions.jump {
+        currentState.player.rigidBody.velocity.y += JUMP_FORCE
+    }
+
+    currentState.player.rigidBody = update_rigid_body(currentState.player.rigidBody, collisionContext, velocityFromActions)
+
+    // currentState = ApplyVerticalMovement(currentState, actions, collisionContext)
+    //
+    // moveVector: rl.Vector3
+    //
+    // if .Forward in move || .Backward in move {
+    //     direction:f32 = 1 if .Forward in move else -1
+    //     forwardVector := get_player_forward(previousState.player)
+    //     forward3d := rl.Vector3 { forwardVector.x, 0, forwardVector.y } * direction
+    //
+    //     moveVector += forward3d
+    //     //currentState = MoveAndSlide(currentState, forward3d, collisionContext)
+    // } 
+    // if .Left in move || .Right in move {
+    //     direction:f32 = 1 if .Right in move else -1
+    //     sidewaysVector := get_player_sideways(previousState.player)
+    //     sideways3d := rl.Vector3 { sidewaysVector.x, 0, sidewaysVector.y } * direction
+    //
+    //     moveVector += sideways3d
+    //     //currentState = MoveAndSlide(currentState, sideways3d, collisionContext)
+    // }
+    //
+    // currentState = MoveAndSlide(currentState, moveVector, collisionContext)
 
     // Rotation
     if (abs(actions.cameraRotation.x) > rl.EPSILON) {
@@ -838,16 +912,17 @@ draw_held_item_to_texture :: proc(destinationTexture: ^rl.RenderTexture2D, itemM
 }
 
 main :: proc() {
+    rl.SetConfigFlags({rl.ConfigFlag.MSAA_4X_HINT})
     rl.InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "ikea gamer")
 
     rl.DisableCursor()
     rl.SetTargetFPS(FPS)
 
     staticData := setup_static_data()
-    initialState := get_initial_game_state()
+    initialState := get_initial_game_state(&staticData)
 
     itemManager := create_item_manager()
-    create_item(&itemManager, PLAYER_INITIAL_POSITION + rl.Vector3{2.0, -1, 0}, { .Table, .Huge })
+    create_item(&itemManager, PLAYER_INITIAL_POSITION + rl.Vector3{2.0, 0.0, 0}, { .Table, .Huge })
 
     cameraMode := rl.CameraMode.FIRST_PERSON
     camera := rl.Camera3D { 
@@ -901,34 +976,26 @@ main :: proc() {
         rl.BeginDrawing()
             rl.ClearBackground(rl.RAYWHITE)
             rl.BeginMode3D(camera)
+                // Draw ground
+                rl.DrawPlane(rl.Vector3{ 0.0, 0.0, 0.0}, rl.Vector2{ 200, 200 }, rl.GREEN) 
 
-                rl.DrawPlane(rl.Vector3{ 0.0, 0.0, 0.0}, rl.Vector2{ 200, 200 }, rl.GREEN) // Draw ground
-
-                // NOTE: this thing takes the rotation amount in degrees instead of radians -_-
-                //rl.DrawModelEx(player, renderState.player.position, rl.Vector3{0.0, 1.0, 0.0}, renderState.playerTransform.rotation, 2.0, rl.GOLD)
-
+                // Draw the walls
                 rl.DrawModel(staticData.axisAlignedScene, rl.Vector3(0), 1.0, rl.WHITE)
                 rl.DrawModel(staticData.angledScene, rl.Vector3(0), 1.0, rl.WHITE)
 
-                //playerBbbw := position_bounding_box(playerBb, renderState.player.position, 2.0)
-                //rl.DrawBoundingBox(playerBbbw, rl.RED)
-
-                // for collider in colliders {
-                //     rl.DrawBoundingBox(collider, rl.RED)
-                // }
-
+                // Draw items
                 for item in get_placed_items(&itemManager) {
                     rl.DrawModel(itemManager.itemModels[item.descriptor.type], item.position, 1.0, rl.GOLD)
                 }
 
+                // Draw shopping cart
+                rl.DrawModel(staticData.shoppingCart.model, renderState.shoppingCart.position, 1.0, rl.WHITE)
+
+                // Draw ghost of placeable item
                 activeItem := get_active_item(&itemManager)
                 if item, ok := activeItem.?; ok {
                     itemBb := position_bounding_box(itemManager.itemColliders[item.id], renderState.heldItemGhostPosition)
                     rl.DrawBoundingBox(itemBb, rl.WHITE)
-                    //model := itemManager.itemModels[item.descriptor.type]
-                    //rl.DrawModel(model, renderState.heldItemGhostPosition, 1.0, rl.BROWN)
-
-                    //rl.DrawSphere(renderState.heldItemGhostPosition, 0.25, rl.BROWN)
                 }
             rl.EndMode3D()
 
