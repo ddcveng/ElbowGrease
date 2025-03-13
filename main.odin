@@ -1015,11 +1015,6 @@ main :: proc() {
                         rl.DrawBoundingBox(itemBb, rl.WHITE)
                     }
                 }
-                // activeItem := get_active_item(&itemManager)
-                // if item, ok := activeItem.?; ok {
-                //     itemBb := position_bounding_box(itemManager.itemColliders[item.id], renderState.heldItemGhostPosition)
-                //     rl.DrawBoundingBox(itemBb, rl.WHITE)
-                // }
             rl.EndMode3D()
 
             itemInHand := itemManager.activeItem != ItemIdInvalid
@@ -1036,12 +1031,23 @@ main :: proc() {
             handState: HandState = HandHoldingItem{1, heldItemTexture.texture} if itemInHand else EmptyHand{0}
             draw_hand(handTex, renderState.interactAnimationTimer, handState)
 
-            if interaction, ok := currentState.availableInteraction.(InteractableItem); ok {
-                interactionMessage := "Press \"E\" to pickup the item"
-                messageCstring := strings.clone_to_cstring(interactionMessage)
+            // Draw interaction help message
+            message: string
+            switch interaction in renderState.availableInteraction {
+            case InteractableItem:
+                message = "Press \"E\" to pickup the item"
+            case PlaceableInCart:
+                message = "Press \"E\" to deposit item in cart" if interaction.accepted else "Item not on shopping list"
+            case PlaceableOnGround:
+                message = "Press \"E\" to place the item on the ground" if interaction.spotValid else "The item cannot be placed here"
+            case NoInteraction:
+            }
+
+            if len(message) != 0 {
+                messageCstring := strings.clone_to_cstring(message)
                 textWidth := rl.MeasureText(messageCstring, 32)
 
-                rl.DrawText(strings.clone_to_cstring(interactionMessage), WINDOW_WIDTH / 2 - textWidth / 2, WINDOW_HEIGHT / 2, 32, rl.BROWN)
+                rl.DrawText(messageCstring, WINDOW_WIDTH / 2 - textWidth / 2, WINDOW_HEIGHT - 100, 32, rl.BLACK)
             }
 
             //debugMsg := fmt.tprintf("Keys: %i / %i", keysPickedUp, KEYS_NEEDED)
