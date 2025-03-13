@@ -71,6 +71,7 @@ PlayerFollowingCamera :: struct {
 
 CollisionContext :: struct {
     playerCollider: rl.BoundingBox,
+    cartCollider: rl.BoundingBox,
 
     sceneColliders: []rl.BoundingBox,
     sceneTriangleColliders: []Triangle
@@ -144,9 +145,8 @@ setup_static_data :: proc() -> StaticData
         }
     }
 
-    cartModel := rl.LoadModelFromMesh(rl.GenMeshCone(1.0, 1.0, 5))
-    cartBb := rl.GetModelBoundingBox(cartModel)
-    shoppingCartData := ShoppingCartStaticData { cartModel, cartBb, { ItemDescriptor{.Table, .Huge} } }
+    cartModel := rl.LoadModelFromMesh(rl.GenMeshCube(1.0, 1.0, 1.0))
+    shoppingCartData := ShoppingCartStaticData { cartModel, { ItemDescriptor{.Table, .Huge} } }
 
     return StaticData {
         playerModel, playerBoundingBox, 
@@ -244,9 +244,9 @@ interpolate_states :: proc(s0: ^GameState, s1: ^GameState, alpha: f32) -> GameSt
 
     ghostPosition := s0.heldItemGhostPosition * (1 - alpha) + s1.heldItemGhostPosition * alpha
 
-    cartPosition := s0.shoppingCart.position * (1 - alpha) + s1.shoppingCart.position * alpha
+    cartPosition := s0.shoppingCart.rigidBody.position * (1 - alpha) + s1.shoppingCart.rigidBody.position * alpha
     newCart := s0.shoppingCart
-    newCart.position = cartPosition
+    newCart.rigidBody.position = cartPosition
 
     return GameState {newPlayer, newPitch, newIATimer, s0.availableInteraction, ghostPosition, newCart}
 }
@@ -340,11 +340,12 @@ get_initial_game_state :: proc(staticData: ^StaticData) -> GameState
 {
     playerBody := RigidBody {PLAYER_INITIAL_POSITION, rl.GetModelBoundingBox(staticData.playerModel), {}}
     player := Player {rigidBody=playerBody, rotation=CAMERA_INITIAL_ROTATION}
-    cart := ShoppingCart {PLAYER_INITIAL_POSITION + {8.0, 0.0, 0.0}, false, {}}
+
+    cartBody := RigidBody {PLAYER_INITIAL_POSITION + {8.0, 0.0, 0.0}, rl.GetModelBoundingBox(staticData.shoppingCart.model), {}}
+    cart := ShoppingCart {cartBody, false, {}}
 
     return GameState {player, 0, 0.0, {}, {}, cart}
 }
-
 
 position_bounding_box :: proc(defaultBb: rl.BoundingBox, position: rl.Vector3) -> rl.BoundingBox {
     bbWithMinAtOrigin := rl.BoundingBox{
@@ -362,6 +363,11 @@ position_bounding_box :: proc(defaultBb: rl.BoundingBox, position: rl.Vector3) -
         bbCenteredAroundOrigin.min + position, 
         bbCenteredAroundOrigin.max + position 
     }
+}
+
+get_rigid_body_bounding_box :: proc(body: RigidBody) -> rl.BoundingBox
+{
+    return position_bounding_box(body.boundingBox, body.position)
 }
 
 TryGetCollidingBox :: proc(playerBb: rl.BoundingBox, colliders: []rl.BoundingBox) -> (rl.BoundingBox, bool)
@@ -676,6 +682,7 @@ handle_interaction :: proc(state: GameState, itemInteraction: ItemInteraction, i
         stateAfterInteraction.heldItemGhostPosition = item.position
 
     case PlaceableInCart:
+        fmt.println("heeej caeky ", interaction.accepted)
 
     case PlaceableOnGround:
         place_active_item(itemManager, interaction.spot)
@@ -688,7 +695,11 @@ handle_interaction :: proc(state: GameState, itemInteraction: ItemInteraction, i
 
 INTERACTION_RADIUS :: f32(5.0 + PLAYER_COLLIDER_RADIUS)
 
-get_possible_item_interaction :: proc(state: GameState, itemManager: ^ItemManager, collisionContext: CollisionContext) -> ItemInteraction
+get_possible_item_interaction :: proc(
+    state: GameState,
+    itemManager: ^ItemManager,
+    collisionContext: CollisionContext,
+    staticData: ^StaticData) -> ItemInteraction
 {
     viewRay := rl.Ray{state.player.rigidBody.position, get_camera_view_vector(state)}
 
@@ -718,22 +729,22 @@ get_possible_item_interaction :: proc(state: GameState, itemManager: ^ItemManage
     itemBox := itemManager.itemColliders[heldItem.id] // not positioned properly yet
 
     // find the spot in the scene where we want to put it
-    anySpot := false
-    spotToPlaceItem: rl.Vector3
-    minPlacementDistance := INTERACTION_RADIUS + rl.EPSILON
-    for box in collisionContext.sceneColliders {
-        collision := rl.GetRayCollisionBox(viewRay, box)
-        if collision.hit && collision.distance < minPlacementDistance {
-            spotToPlaceItem = collision.point
-            minPlacementDistance = collision.distance
-
-            anySpot = true
-        }
-    }
+    collision := ray_x_scene(viewRay, collisionContext)
+    anySpot := collision.hit && collision.distance < INTERACTION_RADIUS + rl.EPSILON
 
     if !anySpot {
         return NoInteraction{}
     }
+
+    cartCollision := rl.GetRayCollisionBox(viewRay, collisionContext.cartCollider)
+    placeInCart := cartCollision.hit && cartCollision.distance - collision.distance < rl.EPSILON
+    if placeInCart {
+        cartAcceptsItem := slice.contains(staticData.shoppingCart.shoppingList[:], heldItem.descriptor)
+
+        return PlaceableInCart{accepted = cartAcceptsItem}
+    }
+
+    spotToPlaceItem := collision.point
 
     itemBoxAtSpot := position_bounding_box(itemBox, spotToPlaceItem)
     ghostMovement := linalg.normalize(spotToPlaceItem - state.heldItemGhostPosition)
@@ -781,7 +792,7 @@ get_possible_item_interaction :: proc(state: GameState, itemManager: ^ItemManage
     //return NoInteraction{}
 }
 
-create_collision_context :: proc(staticData: ^StaticData, itemManager: ^ItemManager) -> CollisionContext
+create_collision_context :: proc(state: GameState, staticData: ^StaticData, itemManager: ^ItemManager) -> CollisionContext
 {
     placedItems := get_placed_items(itemManager)
     placedItemColliders := make([]rl.BoundingBox, len(placedItems))
@@ -789,18 +800,20 @@ create_collision_context :: proc(staticData: ^StaticData, itemManager: ^ItemMana
         placedItemColliders[i] = itemManager.itemColliders[item.id]
     }
 
-    colliderSlices := [][]rl.BoundingBox{ placedItemColliders, staticData.sceneAxisAlignedColliders }
+    cartBoundingBox := get_rigid_body_bounding_box(state.shoppingCart.rigidBody)
+
+    colliderSlices := [][]rl.BoundingBox{ placedItemColliders, staticData.sceneAxisAlignedColliders, {cartBoundingBox} }
     collidersMerged := slice.concatenate(colliderSlices)   
 
-    return CollisionContext { staticData.playerCollider,  collidersMerged, staticData.sceneTriangleColliders}
+    return CollisionContext { staticData.playerCollider, cartBoundingBox, collidersMerged, staticData.sceneTriangleColliders}
 }
 
 FixedUpdate :: proc(previousState: GameState, actions: InputActions, staticData: ^StaticData, itemManager: ^ItemManager) -> GameState
 {
     currentState := previousState
 
-    collisionContext := create_collision_context(staticData, itemManager)
-    availableInteraction := get_possible_item_interaction(currentState, itemManager, collisionContext)
+    collisionContext := create_collision_context(currentState, staticData, itemManager)
+    availableInteraction := get_possible_item_interaction(currentState, itemManager, collisionContext, staticData)
 
     if pog, ok := availableInteraction.(PlaceableOnGround); ok {
         currentState.heldItemGhostPosition = pog.spot
@@ -838,6 +851,9 @@ FixedUpdate :: proc(previousState: GameState, actions: InputActions, staticData:
     }
 
     currentState.player.rigidBody = update_rigid_body(currentState.player.rigidBody, collisionContext, velocityFromActions)
+
+    // Update shopping cart
+    currentState.shoppingCart.rigidBody = update_rigid_body(currentState.shoppingCart.rigidBody, collisionContext)
 
     // currentState = ApplyVerticalMovement(currentState, actions, collisionContext)
     //
@@ -989,14 +1005,21 @@ main :: proc() {
                 }
 
                 // Draw shopping cart
-                rl.DrawModel(staticData.shoppingCart.model, renderState.shoppingCart.position, 1.0, rl.WHITE)
+                rl.DrawModel(staticData.shoppingCart.model, renderState.shoppingCart.rigidBody.position, 1.0, rl.WHITE)
 
                 // Draw ghost of placeable item
-                activeItem := get_active_item(&itemManager)
-                if item, ok := activeItem.?; ok {
-                    itemBb := position_bounding_box(itemManager.itemColliders[item.id], renderState.heldItemGhostPosition)
-                    rl.DrawBoundingBox(itemBb, rl.WHITE)
+                if placeOnGround, ok := renderState.availableInteraction.(PlaceableOnGround); ok {
+                    activeItem := get_active_item(&itemManager)
+                    if item, itemOk := activeItem.?; itemOk {
+                        itemBb := position_bounding_box(itemManager.itemColliders[item.id], renderState.heldItemGhostPosition)
+                        rl.DrawBoundingBox(itemBb, rl.WHITE)
+                    }
                 }
+                // activeItem := get_active_item(&itemManager)
+                // if item, ok := activeItem.?; ok {
+                //     itemBb := position_bounding_box(itemManager.itemColliders[item.id], renderState.heldItemGhostPosition)
+                //     rl.DrawBoundingBox(itemBb, rl.WHITE)
+                // }
             rl.EndMode3D()
 
             itemInHand := itemManager.activeItem != ItemIdInvalid

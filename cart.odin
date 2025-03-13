@@ -7,14 +7,12 @@ ITEMS_TO_BUY :: 1
 ShoppingCartStaticData :: struct 
 {
     model: rl.Model,
-    boundingBox: rl.BoundingBox,
-
     shoppingList: [ITEMS_TO_BUY]ItemDescriptor,
 }
 
 ShoppingCart :: struct 
 {
-    position: Point3,
+    rigidBody: RigidBody,
     connectedToPlayer: bool,
 
     items: small_array.Small_Array(ITEMS_TO_BUY, ItemId)
