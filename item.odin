@@ -120,6 +120,18 @@ place_active_item :: proc(manager: ^ItemManager, position: Point3)
     manager.activeItem = ItemIdInvalid
 }
 
+deposit_active_item_in_cart :: proc(manager: ^ItemManager, cart: ^ShoppingCart)
+{
+    assert(manager.activeItem != ItemIdInvalid)
+
+    item := manager.items[manager.activeItem]
+    add_item_to_cart(cart, item)
+
+    // Disable the item and clear active item
+    manager.items[manager.activeItem].id = ItemIdInvalid
+    manager.activeItem = ItemIdInvalid
+}
+
 get_placed_items :: proc(manager: ^ItemManager) -> []Item
 {
     allItems := slice.clone(manager.items[:])
@@ -147,7 +159,7 @@ PlaceableOnGround :: struct {
 }
 
 PlaceableInCart :: struct {
-    accepted: bool, // the player is aiming at the cart, but the item they are holding it not on the shopping list
+    status: CartItemStatus,
 }
 
 NoInteraction :: struct {}
@@ -159,10 +171,3 @@ ItemInteraction :: union #no_nil {
     PlaceableInCart,
 }
 
-
-
-// get interactable item
-// cast a ray in the looking direction, if it intersects an item and the item is close enough, it is interactable
-// items can either be picked up or placed. if an item is picked up, you cannot pick up another one. So in that case this logic never runs and we don't have to deal with it.
-//      actually, I do need to handle this. I don't want to collide with the couch I am holding in my hand, so I need to disable that collider...
-// when an item is placed, we need to update its position and bounding box placement.

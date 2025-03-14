@@ -682,10 +682,14 @@ handle_interaction :: proc(state: GameState, itemInteraction: ItemInteraction, i
         stateAfterInteraction.heldItemGhostPosition = item.position
 
     case PlaceableInCart:
-        fmt.println("heeej caeky ", interaction.accepted)
+        if interaction.status == .Acceptable {
+            deposit_active_item_in_cart(itemManager, &stateAfterInteraction.shoppingCart)
+        }
 
     case PlaceableOnGround:
-        place_active_item(itemManager, interaction.spot)
+        if interaction.spotValid {
+            place_active_item(itemManager, interaction.spot)
+        }
 
     case NoInteraction:
     }
@@ -739,9 +743,8 @@ get_possible_item_interaction :: proc(
     cartCollision := rl.GetRayCollisionBox(viewRay, collisionContext.cartCollider)
     placeInCart := cartCollision.hit && cartCollision.distance - collision.distance < rl.EPSILON
     if placeInCart {
-        cartAcceptsItem := slice.contains(staticData.shoppingCart.shoppingList[:], heldItem.descriptor)
-
-        return PlaceableInCart{accepted = cartAcceptsItem}
+        cartStatus := can_place_in_shopping_cart(&staticData.shoppingCart, state.shoppingCart, heldItem.descriptor)
+        return PlaceableInCart{cartStatus}
     }
 
     spotToPlaceItem := collision.point
@@ -1037,7 +1040,14 @@ main :: proc() {
             case InteractableItem:
                 message = "Press \"E\" to pickup the item"
             case PlaceableInCart:
-                message = "Press \"E\" to deposit item in cart" if interaction.accepted else "Item not on shopping list"
+                switch interaction.status {
+                case .Acceptable:
+                    message = "Press \"E\" to deposit item in cart"
+                case .NotOnList:
+                    message = "Item not on shopping list"
+                case .AlreadyInCart:
+                    message = "Item already in cart"
+                }
             case PlaceableOnGround:
                 message = "Press \"E\" to place the item on the ground" if interaction.spotValid else "The item cannot be placed here"
             case NoInteraction:
