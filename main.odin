@@ -12,7 +12,7 @@ TPS :: 30 // Simulation tics per seconds
 DT :: 1.0 / TPS // Delta time for the simulation
 
 PLAYER_HEIGHT :: 2.0
-PLAYER_INITIAL_POSITION :: rl.Vector3{-43.0, 1.2, -3.0}
+PLAYER_INITIAL_POSITION :: rl.Vector3{-41.0, 1.2, 1.0}
 CAMERA_DISTANCE :: f32(6)
 CAMERA_INITIAL_ROTATION :: f32(0)
 CAMERA_HEIGHT_DIFFERENCE :: f32(1.5)
@@ -27,7 +27,7 @@ HELD_ITEM_SIZE :: WINDOW_HEIGHT / 6.0
 GRAVITY :: 10.0
 SPEED :: 7.0
 SENSITIVITY :: 5.0 // for mouse rotation
-JUMP_FORCE :: 30.0
+JUMP_FORCE :: 40.0
 
 VELOCITY_DECAY_MULTIPLIER :: 0.9
 
@@ -107,19 +107,19 @@ setup_static_data :: proc() -> StaticData
     playerModel := rl.LoadModelFromMesh(rl.GenMeshCube(1.0, PLAYER_HEIGHT, 1.0))
     playerBoundingBox := rl.GetModelBoundingBox(playerModel)
 
-    axisAlignedScene := rl.LoadModel("res/scenes/ikeamaze.glb")
+    axisAlignedScene := rl.LoadModel("res/scenes/ikea2.glb")
     //axisAlignedScene.materials[1].shader = lightingShader
     // I can overwrite the shared on a per-mesh basis even though its just one model!
     // the color from the original material is lost though... maybe painting vertex colors would work?
     // what about textures from blender?? I guess I can acess them somehow if I find out where they are bound
 
-    colliders := make([]rl.BoundingBox, axisAlignedScene.meshCount+1)
+    colliders := make([]rl.BoundingBox, axisAlignedScene.meshCount)
     for mesh, inx in axisAlignedScene.meshes[:axisAlignedScene.meshCount] {
-        colliders[inx+1] = rl.GetMeshBoundingBox(mesh)
+        colliders[inx] = rl.GetMeshBoundingBox(mesh)
     }
 
     // ground collider
-    colliders[0] = rl.BoundingBox { rl.Vector3{-100, -10, -100}, rl.Vector3 {100, 0, 100} }
+    //colliders[0] = rl.BoundingBox { rl.Vector3{-100, -10, -100}, rl.Vector3 {100, 0, 100} }
 
     // collisions calculated by triangle intersection (these are rotated objects and stuff where the aabb is not good enough)
     angledScene := rl.LoadModel("res/scenes/sceneAngled.glb")
@@ -262,10 +262,16 @@ get_camera_view_vector :: proc(state: GameState) -> rl.Vector3
     return linalg.normalize(viewVector)
 }
 
+get_player_head_position :: proc(player: Player) -> rl.Vector3
+{
+    // anchor the camera at the top of the player bounding box
+    return player.rigidBody.position //+ PLAYER_HEIGHT / 2.0
+}
+
 //first person camera
 setup_camera :: proc(camera: ^rl.Camera, state: GameState)
 {
-    camera.position = state.player.rigidBody.position
+    camera.position = get_player_head_position(state.player)
     camera.target = camera.position + get_camera_view_vector(state)
 }
 
@@ -705,7 +711,7 @@ get_possible_item_interaction :: proc(
     collisionContext: CollisionContext,
     staticData: ^StaticData) -> ItemInteraction
 {
-    viewRay := rl.Ray{state.player.rigidBody.position, get_camera_view_vector(state)}
+    viewRay := rl.Ray{get_player_head_position(state.player), get_camera_view_vector(state)}
 
     if can_pickup_item(itemManager) {
         interactableItems := get_placed_items(itemManager)
@@ -753,7 +759,9 @@ get_possible_item_interaction :: proc(
     ghostMovement := linalg.normalize(spotToPlaceItem - state.heldItemGhostPosition)
 
     normalsOfIntersectedFaces: [dynamic]IntersectionDetails
-    for box in collisionContext.sceneColliders {
+    sceneCollidersWithPlayer := slice.concatenate([][]rl.BoundingBox{collisionContext.sceneColliders, { collisionContext.playerCollider }})
+
+    for box in sceneCollidersWithPlayer {
         collision := rl.CheckCollisionBoxes(itemBoxAtSpot, box)
         collision or_continue
 
@@ -769,7 +777,7 @@ get_possible_item_interaction :: proc(
     boxAtCorrectedSpot := position_bounding_box(itemBox, correctedPosition)
 
     ok := true
-    for box in collisionContext.sceneColliders {
+    for box in sceneCollidersWithPlayer {
         ok = !rl.CheckCollisionBoxes(boxAtCorrectedSpot, box)
         ok or_break
     }
@@ -808,7 +816,11 @@ create_collision_context :: proc(state: GameState, staticData: ^StaticData, item
     colliderSlices := [][]rl.BoundingBox{ placedItemColliders, staticData.sceneAxisAlignedColliders, {cartBoundingBox} }
     collidersMerged := slice.concatenate(colliderSlices)   
 
-    return CollisionContext { staticData.playerCollider, cartBoundingBox, collidersMerged, staticData.sceneTriangleColliders}
+    return CollisionContext { 
+        get_rigid_body_bounding_box(state.player.rigidBody), 
+        cartBoundingBox, 
+        collidersMerged,
+        staticData.sceneTriangleColliders}
 }
 
 FixedUpdate :: proc(previousState: GameState, actions: InputActions, staticData: ^StaticData, itemManager: ^ItemManager) -> GameState
@@ -847,7 +859,7 @@ FixedUpdate :: proc(previousState: GameState, actions: InputActions, staticData:
     // if grounded and action.jump, add vertical force up to the body, not to the velocity from actions!
     rayToGround := rl.Ray{ currentState.player.rigidBody.position, rl.Vector3{0.0, -1.0, 0.0} }
     groundHit := ray_x_scene(rayToGround, collisionContext)
-    playerGrounded := true//groundHit.hit && groundHit.distance < 1.0 + 0.001
+    playerGrounded := groundHit.hit && groundHit.distance < 1.0 + 0.001
 
     if playerGrounded && actions.jump {
         currentState.player.rigidBody.velocity.y += JUMP_FORCE
@@ -922,10 +934,14 @@ draw_held_item_to_texture :: proc(destinationTexture: ^rl.RenderTexture2D, itemM
         45.0,
         rl.CameraProjection.PERSPECTIVE }
 
+    itemBox := rl.GetModelBoundingBox(itemModel) // @speed; pass the bb to this method
+    diagonalLength := linalg.length(itemBox.max - itemBox.min)
+    scale := 2 / diagonalLength
+
     rl.BeginTextureMode(destinationTexture^)
     rl.ClearBackground(rl.BLANK)
     rl.BeginMode3D(txCamera)
-        rl.DrawModelEx(itemModel, itemPos, rl.Vector3{0.0, 1.0, 1.0}, f32(t * ITEM_ROTATION_SPEED), rl.Vector3(1.0), rl.GOLD)
+        rl.DrawModelEx(itemModel, itemPos, rl.Vector3{0.0, 1.0, 1.0}, f32(t * ITEM_ROTATION_SPEED), rl.Vector3(scale), rl.WHITE)
     rl.EndMode3D()
     rl.EndTextureMode()
 }
@@ -941,7 +957,11 @@ main :: proc() {
     initialState := get_initial_game_state(&staticData)
 
     itemManager := create_item_manager()
-    create_item(&itemManager, PLAYER_INITIAL_POSITION + rl.Vector3{2.0, 0.0, 0}, { .Table, .Huge })
+    create_item(&itemManager, PLAYER_INITIAL_POSITION + rl.Vector3{2.0, 0.0, 0}, { .Lamp, .Huge })
+    create_item(&itemManager, PLAYER_INITIAL_POSITION + rl.Vector3{2.0, 0.0, 2}, { .Table, .Huge })
+    create_item(&itemManager, PLAYER_INITIAL_POSITION + rl.Vector3{2.0, 0.0, 4}, { .Plant, .Huge })
+    create_item(&itemManager, PLAYER_INITIAL_POSITION + rl.Vector3{4.0, 0.0, 4}, { .Chair, .Huge })
+
 
     cameraMode := rl.CameraMode.FIRST_PERSON
     camera := rl.Camera3D { 
@@ -996,7 +1016,7 @@ main :: proc() {
             rl.ClearBackground(rl.RAYWHITE)
             rl.BeginMode3D(camera)
                 // Draw ground
-                rl.DrawPlane(rl.Vector3{ 0.0, 0.0, 0.0}, rl.Vector2{ 200, 200 }, rl.GREEN) 
+                //rl.DrawPlane(rl.Vector3{ 0.0, 0.0, 0.0}, rl.Vector2{ 200, 200 }, rl.GREEN) 
 
                 // Draw the walls
                 rl.DrawModel(staticData.axisAlignedScene, rl.Vector3(0), 1.0, rl.WHITE)
@@ -1004,7 +1024,8 @@ main :: proc() {
 
                 // Draw items
                 for item in get_placed_items(&itemManager) {
-                    rl.DrawModel(itemManager.itemModels[item.descriptor.type], item.position, 1.0, rl.GOLD)
+                    rl.DrawModel(itemManager.itemModels[item.descriptor.type], item.position, 1.0, rl.WHITE)
+                    rl.DrawBoundingBox(itemManager.itemColliders[item.id], rl.BLUE)
                 }
 
                 // Draw shopping cart
@@ -1015,7 +1036,8 @@ main :: proc() {
                     activeItem := get_active_item(&itemManager)
                     if item, itemOk := activeItem.?; itemOk {
                         itemBb := position_bounding_box(itemManager.itemColliders[item.id], renderState.heldItemGhostPosition)
-                        rl.DrawBoundingBox(itemBb, rl.WHITE)
+                        color := rl.WHITE if placeOnGround.spotValid else rl.RED
+                        rl.DrawBoundingBox(itemBb, color)
                     }
                 }
             rl.EndMode3D()
