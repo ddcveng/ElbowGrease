@@ -35,7 +35,7 @@ ItemIdInvalid :: ItemId(-1)
 Item :: struct 
 {
     id: ItemId,
-    position: Point3,
+    rigidBody: RigidBody,
     descriptor: ItemDescriptor,
 }
 
@@ -146,9 +146,12 @@ create_item :: proc(manager: ^ItemManager, itemPosition: Point3, itemDescriptor:
         panic("Maximum item amount reached!")
     }
 
-    item := Item { ItemId(manager.itemIdCounter), itemPosition, itemDescriptor }
+    itemBb := rl.GetModelBoundingBox(manager.itemModels[itemDescriptor.type])
+    itemRigidBody := RigidBody{itemPosition, itemBb, {}}
+    item := Item { ItemId(manager.itemIdCounter), itemRigidBody, itemDescriptor }
+
     manager.items[item.id] = item
-    manager.itemColliders[item.id] = position_bounding_box(rl.GetModelBoundingBox(manager.itemModels[item.descriptor.type]), item.position)
+    manager.itemColliders[item.id] = position_bounding_box(itemBb, itemPosition)
     manager.itemIdCounter += 1
 
     return item
@@ -178,7 +181,7 @@ place_active_item :: proc(manager: ^ItemManager, position: Point3)
 {
     assert(manager.activeItem != ItemIdInvalid)
 
-    manager.items[manager.activeItem].position = position
+    manager.items[manager.activeItem].rigidBody.position = position
     manager.itemColliders[manager.activeItem] = position_bounding_box(manager.itemColliders[manager.activeItem], position)
 
     manager.activeItem = ItemIdInvalid

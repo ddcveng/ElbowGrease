@@ -81,7 +81,9 @@ CollisionContext :: struct {
     cartCollider: rl.BoundingBox,
 
     sceneColliders: []rl.BoundingBox,
-    sceneTriangleColliders: []Triangle
+    itemColliders: []rl.BoundingBox,
+    sceneTriangleColliders: []Triangle,
+    ignoredItem: ItemId,
 }
 
 GameState :: struct {
@@ -393,9 +395,20 @@ get_rigid_body_bounding_box :: proc(body: RigidBody) -> rl.BoundingBox
     return position_bounding_box(body.boundingBox, body.position)
 }
 
-TryGetCollidingBox :: proc(playerBb: rl.BoundingBox, colliders: []rl.BoundingBox) -> (rl.BoundingBox, bool)
+TryGetCollidingBox :: proc(playerBb: rl.BoundingBox, collisionContext: CollisionContext) -> (rl.BoundingBox, bool)
 {
-    for collider in colliders {
+    for collider in collisionContext.sceneColliders {
+        colliding := rl.CheckCollisionBoxes(playerBb, collider)
+        if colliding {
+            return collider, true
+        }
+    }
+
+    for collider, i in collisionContext.itemColliders {
+        if i == int(collisionContext.ignoredItem) {
+            continue 
+        }
+
         colliding := rl.CheckCollisionBoxes(playerBb, collider)
         if colliding {
             return collider, true
@@ -427,7 +440,7 @@ TryGetCollidingTriangleNormal :: proc(playerPosition: Point3, triangles: []Trian
 check_any_collision :: proc(rigidBody: RigidBody, collisionContext: CollisionContext) -> bool
 {
     bodyBox := position_bounding_box(rigidBody.boundingBox, rigidBody.position)
-    box, collision := TryGetCollidingBox(bodyBox, collisionContext.sceneColliders)
+    box, collision := TryGetCollidingBox(bodyBox, collisionContext)
     if collision {
         return true
     }
@@ -602,9 +615,10 @@ update_rigid_body :: proc(
     newBody.position += verticalVelocity * DT
 
     boxVertical := position_bounding_box(newBody.boundingBox, newBody.position)
-    cBox, collision := TryGetCollidingBox(boxVertical, collisionContext.sceneColliders)
+    cBox, collision := TryGetCollidingBox(boxVertical, collisionContext)
     if collision {
         details := get_intersection_details(boxVertical, cBox, linalg.normalize(verticalVelocity))
+        fmt.printfln("intersectionby: %f", details.penetrationDepth)
 
         newBody.position += details.collisionNormal * details.penetrationDepth + rl.EPSILON
         newBody.velocity.y = 0
@@ -640,7 +654,7 @@ move_and_slide :: proc(rigidBody: RigidBody, collisionContext: CollisionContext)
     originalSpeed := linalg.length(rigidBody.velocity)
 
     playerBbAfterMove := position_bounding_box(body.boundingBox, body.position)
-    collidedBox, collision := TryGetCollidingBox(playerBbAfterMove, collisionContext.sceneColliders)
+    collidedBox, collision := TryGetCollidingBox(playerBbAfterMove, collisionContext)
     if collision
     {
         body = rigidBody
@@ -702,7 +716,7 @@ handle_interaction :: proc(state: GameState, itemInteraction: ItemInteraction, i
     switch interaction in itemInteraction {
     case InteractableItem:
         item := pickup_item(itemManager, interaction.itemId)
-        stateAfterInteraction.heldItemGhostPosition = item.position
+        stateAfterInteraction.heldItemGhostPosition = item.rigidBody.position
 
     case PlaceableInCart:
         if interaction.status == .Acceptable {
@@ -736,7 +750,7 @@ get_possible_item_interaction :: proc(
 
         minIntersectionDistance := INTERACTION_RADIUS + rl.EPSILON
         for item in interactableItems {
-            itemBox := itemManager.itemColliders[item.id]            
+            itemBox := get_rigid_body_bounding_box(item.rigidBody)
             collision := rl.GetRayCollisionBox(viewRay, itemBox)
             if collision.hit && collision.distance < minIntersectionDistance {
                 minIntersectionDistance = collision.distance
@@ -753,7 +767,7 @@ get_possible_item_interaction :: proc(
 
     // the player is holding an item in hand
     heldItem := get_active_item(itemManager).?
-    itemBox := itemManager.itemColliders[heldItem.id] // not positioned properly yet
+    itemBox := heldItem.rigidBody.boundingBox // not positioned yet
 
     // find the spot in the scene where we want to put it
     collision := ray_x_scene(viewRay, collisionContext)
@@ -825,19 +839,23 @@ create_collision_context :: proc(state: GameState, staticData: ^StaticData, item
     placedItems := get_placed_items(itemManager)
     placedItemColliders := make([]rl.BoundingBox, len(placedItems))
     for item, i in placedItems {
-        placedItemColliders[i] = itemManager.itemColliders[item.id]
+        //placedItemColliders[i] = itemManager.itemColliders[item.id]
+        placedItemColliders[i] = get_rigid_body_bounding_box(item.rigidBody)
     }
 
-    cartBoundingBox := get_rigid_body_bounding_box(state.shoppingCart.rigidBody)
+    //cartBoundingBox := get_rigid_body_bounding_box(state.shoppingCart.rigidBody)
 
-    colliderSlices := [][]rl.BoundingBox{ placedItemColliders, staticData.sceneAxisAlignedColliders, {cartBoundingBox} }
-    collidersMerged := slice.concatenate(colliderSlices)   
+
+    //colliderSlices := [][]rl.BoundingBox{ placedItemColliders, staticData.sceneAxisAlignedColliders, {cartBoundingBox} }
+    //collidersMerged := slice.concatenate(colliderSlices)   
 
     return CollisionContext { 
         get_rigid_body_bounding_box(state.player.rigidBody), 
-        cartBoundingBox, 
-        collidersMerged,
-        staticData.sceneTriangleColliders}
+        {}, 
+        staticData.sceneAxisAlignedColliders,
+        placedItemColliders,
+        staticData.sceneTriangleColliders,
+        ItemIdInvalid}
 }
 
 FixedUpdate :: proc(previousState: GameState, actions: InputActions, staticData: ^StaticData, itemManager: ^ItemManager) -> GameState
@@ -885,7 +903,21 @@ FixedUpdate :: proc(previousState: GameState, actions: InputActions, staticData:
     currentState.player.rigidBody = update_rigid_body(currentState.player.rigidBody, collisionContext, velocityFromActions)
 
     // Update shopping cart
-    currentState.shoppingCart.rigidBody = update_rigid_body(currentState.shoppingCart.rigidBody, collisionContext)
+    //currentState.shoppingCart.rigidBody = update_rigid_body(currentState.shoppingCart.rigidBody, collisionContext)
+
+    // itemManager.items[0].rigidBody = update_rigid_body(itemManager.items[0].rigidBody, collisionContext)
+    // fmt.println(itemManager.items[0].rigidBody.position)
+    // fmt.println(itemManager.items[0].rigidBody.velocity)
+    for i in 0..<len(itemManager.items)
+    {
+        itemActive := itemManager.items[i].id != ItemIdInvalid
+        itemActive or_continue
+
+        collisionContext.ignoredItem = ItemId(i)
+        itemManager.items[i].rigidBody = update_rigid_body(itemManager.items[i].rigidBody,collisionContext)
+        //fmt.println(item.rigidBody.position)
+    }
+    collisionContext.ignoredItem = ItemIdInvalid
 
     // currentState = ApplyVerticalMovement(currentState, actions, collisionContext)
     //
@@ -1094,8 +1126,9 @@ main :: proc() {
 
                 // Draw items
                 for item in get_placed_items(&itemManager) {
-                    rl.DrawModel(itemManager.itemModels[item.descriptor.type], item.position, 1.0, rl.WHITE)
-                    rl.DrawBoundingBox(itemManager.itemColliders[item.id], rl.BLUE)
+                    //fmt.println(item.rigidBody.position)
+                    rl.DrawModel(itemManager.itemModels[item.descriptor.type], item.rigidBody.position, 1.0, rl.WHITE)
+                    //rl.DrawBoundingBox(itemManager.itemColliders[item.id], rl.BLUE)
                 }
 
                 // Draw shopping cart
@@ -1105,7 +1138,7 @@ main :: proc() {
                 if placeOnGround, ok := renderState.availableInteraction.(PlaceableOnGround); ok {
                     activeItem := get_active_item(&itemManager)
                     if item, itemOk := activeItem.?; itemOk {
-                        itemBb := position_bounding_box(itemManager.itemColliders[item.id], renderState.heldItemGhostPosition)
+                        itemBb := position_bounding_box(itemManager.items[item.id].rigidBody.boundingBox, renderState.heldItemGhostPosition)
                         color := rl.WHITE if placeOnGround.spotValid else rl.RED
                         rl.DrawBoundingBox(itemBb, color)
                     }
