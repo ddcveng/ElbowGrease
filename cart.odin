@@ -3,7 +3,7 @@ import rl "vendor:raylib"
 import "core:container/small_array"
 import "core:slice"
 
-ITEMS_TO_BUY :: 1
+ITEMS_TO_BUY :: 4
 
 ShoppingCartStaticData :: struct 
 {

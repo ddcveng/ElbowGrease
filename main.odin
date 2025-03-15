@@ -157,7 +157,12 @@ setup_static_data :: proc() -> StaticData
     // }
 
     cartModel := rl.LoadModelFromMesh(rl.GenMeshCube(1.0, 1.0, 1.0))
-    shoppingCartData := ShoppingCartStaticData { cartModel, { ItemDescriptor{.Table, .Huge} } }
+    shoppingCartData := ShoppingCartStaticData { cartModel, { 
+        ItemDescriptor{.Table, .Huge},
+        ItemDescriptor{.Chair, .Red},
+        ItemDescriptor{.Plant, .Blue},
+        ItemDescriptor{.Lamp, .Regular},
+    } }
 
     material_textures := rl.LoadTexture("res/material_textures.png")
     materialIndices := load_texture_indices("res/level_material_indices.json")
@@ -1183,6 +1188,19 @@ main :: proc() {
                 textWidth := rl.MeasureText(messageCstring, 32)
 
                 rl.DrawText(messageCstring, WINDOW_WIDTH / 2 - textWidth / 2, WINDOW_HEIGHT - 100, 32, rl.BLACK)
+            }
+
+            rl.DrawText(strings.clone_to_cstring("Shopping list:"), WINDOW_WIDTH - 175, 10, 25, rl.BLACK)
+
+            for shoppingItem, i in staticData.shoppingCart.shoppingList {
+                itemMsg := fmt.tprintf("%s %s", shoppingItem.variant, shoppingItem.type)
+                x := i32(WINDOW_WIDTH - 175)
+                y := i32(50 + i*30)
+                rl.DrawText(strings.clone_to_cstring(itemMsg), x, y, 20, rl.BLACK)
+
+                if can_place_in_shopping_cart(&staticData.shoppingCart, renderState.shoppingCart, shoppingItem) == CartItemStatus.AlreadyInCart {
+                    rl.DrawLine(i32(x+10), i32(y+10), i32(x+10+100), i32(y+10), rl.RED)
+                }
             }
 
             //debugMsg := fmt.tprintf("Keys: %i / %i", keysPickedUp, KEYS_NEEDED)
