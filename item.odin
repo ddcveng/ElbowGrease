@@ -49,9 +49,11 @@ ItemManager :: struct
 create_item_manager :: proc() -> ItemManager
 {
     manager := ItemManager {}
-    for type in ItemType {
-        manager.itemModels[type] = rl.LoadModelFromMesh(rl.GenMeshCube(1.0, 1.0, 1.0))
-    }
+
+    manager.itemModels[.Table] = rl.LoadModel("res/scenes/table.glb")
+    manager.itemModels[.Lamp] = rl.LoadModel("res/scenes/lamp.glb")
+    manager.itemModels[.Chair] = rl.LoadModel("res/scenes/chair.glb")
+    manager.itemModels[.Plant] = rl.LoadModel("res/scenes/plant.glb")
 
     manager.activeItem = ItemIdInvalid
 
