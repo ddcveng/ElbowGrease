@@ -7,7 +7,10 @@ in vec3 fragPosition;
 in vec3 fragNormal;
 in vec2 fragUv;
 
+flat in vec2 tiling;
+
 uniform sampler2D albedo;
+uniform int textureIndex = 0;
 
 vec3 sunPosition = vec3(100.0, 200.0, 100.0);
 vec3 sun_color = vec3(1.64, 1.27, 0.99);
@@ -26,6 +29,9 @@ void main()
 
 	vec4 lighting = vec4(sunlight + indirect, 1.0);
 
-	vec4 diffuse = texture(albedo, fragUv);
+	vec2 tiledUv = vec2(fract(fragUv.x * tiling.x), fract(fragUv.y * tiling.y));
+	vec2 texUv = vec2(tiledUv.x * 0.25 + 0.25 * textureIndex, tiledUv.y);
+
+	vec4 diffuse = texture(albedo, texUv);
 	FragColor = lighting * diffuse;
 }

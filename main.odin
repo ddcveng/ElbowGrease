@@ -39,6 +39,13 @@ Pivot :: enum {
     bottom = 1,
 }
 
+TextureIndex :: enum {
+    Tiles,
+    PorousStone,
+    Carpet,
+    BlueMetal,
+}
+
 adjust_y_pos :: proc(y_pos: f32, scale: f32, pivot := Pivot.center) -> f32 {
     switch (pivot) {
     case .center: return y_pos
@@ -92,12 +99,14 @@ StaticData :: struct {
     playerCollider: rl.BoundingBox,
 
     axisAlignedScene: rl.Model,
-    angledScene: rl.Model,
+    //angledScene: rl.Model,
 
     sceneAxisAlignedColliders: []rl.BoundingBox,
     sceneTriangleColliders: []Triangle,
 
     shoppingCart: ShoppingCartStaticData,
+    material_texture_atlas: rl.Texture2D,
+    meshTextureIndices: []TextureIndex, // The texture index at index i of this array corresponds to the mesh at index i in the model.
 }
 
 setup_static_data :: proc() -> StaticData
@@ -122,37 +131,42 @@ setup_static_data :: proc() -> StaticData
     //colliders[0] = rl.BoundingBox { rl.Vector3{-100, -10, -100}, rl.Vector3 {100, 0, 100} }
 
     // collisions calculated by triangle intersection (these are rotated objects and stuff where the aabb is not good enough)
-    angledScene := rl.LoadModel("res/scenes/sceneAngled.glb")
-    angledMeshes := angledScene.meshes[:angledScene.meshCount]
-    //triangleCount := slice.reduce(angledMeshes, 0, proc(accumulator: int, mesh: rl.Mesh) -> int { return accumulator + int(mesh.triangleCount)})
-    //angledSceneTriangles := make([]Triangle, triangleCount)
-    angledSceneTriangles: [dynamic]Triangle
-    
-    for mesh in angledMeshes {
-        vertexComponents := mesh.vertices[:3 * mesh.vertexCount]
-        vertices: [dynamic]Point3
-
-        for i := 0; i < len(vertexComponents); i += 3 {
-            vertex := Point3{ vertexComponents[i], vertexComponents[i+1], vertexComponents[i+2] }
-            append(&vertices, vertex)
-        }
-
-
-        indices := mesh.indices[:3 * mesh.triangleCount]
-        for i := 0; i < len(indices); i += 3 {
-            triangle: Triangle = {vertices[indices[i]], vertices[indices[i+1]], vertices[indices[i+2]]}
-            append(&angledSceneTriangles, triangle)
-        }
-    }
+    // angledScene := rl.LoadModel("res/scenes/sceneAngled.glb")
+    // angledMeshes := angledScene.meshes[:angledScene.meshCount]
+    // //triangleCount := slice.reduce(angledMeshes, 0, proc(accumulator: int, mesh: rl.Mesh) -> int { return accumulator + int(mesh.triangleCount)})
+    // //angledSceneTriangles := make([]Triangle, triangleCount)
+    // angledSceneTriangles: [dynamic]Triangle
+    // 
+    // for mesh in angledMeshes {
+    //     vertexComponents := mesh.vertices[:3 * mesh.vertexCount]
+    //     vertices: [dynamic]Point3
+    //
+    //     for i := 0; i < len(vertexComponents); i += 3 {
+    //         vertex := Point3{ vertexComponents[i], vertexComponents[i+1], vertexComponents[i+2] }
+    //         append(&vertices, vertex)
+    //     }
+    //
+    //
+    //     indices := mesh.indices[:3 * mesh.triangleCount]
+    //     for i := 0; i < len(indices); i += 3 {
+    //         triangle: Triangle = {vertices[indices[i]], vertices[indices[i+1]], vertices[indices[i+2]]}
+    //         append(&angledSceneTriangles, triangle)
+    //     }
+    // }
 
     cartModel := rl.LoadModelFromMesh(rl.GenMeshCube(1.0, 1.0, 1.0))
     shoppingCartData := ShoppingCartStaticData { cartModel, { ItemDescriptor{.Table, .Huge} } }
 
+    material_textures := rl.LoadTexture("res/material_textures.png")
+    materialIndices := load_texture_indices("res/level_material_indices.json")
+
     return StaticData {
         playerModel, playerBoundingBox, 
-        axisAlignedScene, angledScene, 
-        colliders, angledSceneTriangles[:],
-        shoppingCartData
+        axisAlignedScene, /*angledScene, */
+        colliders, {},
+        shoppingCartData,
+        material_textures,
+        materialIndices
     }
 }
 
@@ -953,8 +967,41 @@ main :: proc() {
     rl.DisableCursor()
     rl.SetTargetFPS(FPS)
 
+    textureIndices := load_texture_indices("res/testjson.json")
+    fmt.println(textureIndices)
+    
+    lightingShader := rl.LoadShader("res/shaders/basic_lighting.vs", "res/shaders/basic_lighting.fs")
+    rednessLocation := rl.GetShaderLocation(lightingShader, strings.clone_to_cstring("textureIndex"))
+    tilingLocation := rl.GetShaderLocation(lightingShader, strings.clone_to_cstring("meshDimensions"))
+    texIndex: i32 = 0
+    //rl.SetShaderValue(lightingShader, rednessLocation, &redness, rl.ShaderUniformDataType.FLOAT)
+
+
+    // material2: rl.Material = { 
+    //     shader = lightingShader,
+    //     maps = make_multi_pointer([^]rl.MaterialMap, len(rl.MaterialMapIndex)) 
+    // }
+    // rl.SetMaterialTexture(&material2, rl.MaterialMapIndex.ALBEDO, texture)
+
+    mesh := rl.GenMeshCube(1.0, 1.0, 1.0)
+    // model := rl.LoadModelFromMesh(mesh)
+    // model.materials[0].shader = lightingShader
+    // model.materials[0].maps[rl.MaterialMapIndex.ALBEDO].texture = texture
+
+    meshPos := PLAYER_INITIAL_POSITION + {6, 0, 6}
+    meshTransform := rl.MatrixTranslate(meshPos.x, meshPos.y, meshPos.z)
+
+    meshPos2 := PLAYER_INITIAL_POSITION + {8, 0, 6}
+    meshTransform2 := rl.MatrixTranslate(meshPos2.x, meshPos2.y, meshPos2.z)
+
     staticData := setup_static_data()
     initialState := get_initial_game_state(&staticData)
+
+    material: rl.Material = { 
+        shader = lightingShader,
+        maps = make_multi_pointer([^]rl.MaterialMap, len(rl.MaterialMapIndex)) 
+    }
+    rl.SetMaterialTexture(&material, rl.MaterialMapIndex.ALBEDO, staticData.material_texture_atlas)
 
     itemManager := create_item_manager()
     create_item(&itemManager, PLAYER_INITIAL_POSITION + rl.Vector3{2.0, 0.0, 0}, { .Lamp, .Huge })
@@ -1015,12 +1062,30 @@ main :: proc() {
         rl.BeginDrawing()
             rl.ClearBackground(rl.RAYWHITE)
             rl.BeginMode3D(camera)
-                // Draw ground
-                //rl.DrawPlane(rl.Vector3{ 0.0, 0.0, 0.0}, rl.Vector2{ 200, 200 }, rl.GREEN) 
+
+                tilingDefault := rl.Vector3(1.0)
+                rl.SetShaderValue(lightingShader, tilingLocation, &tilingDefault, rl.ShaderUniformDataType.VEC3)
+                texIndex = 1
+                rl.SetShaderValue(lightingShader, rednessLocation, &texIndex, rl.ShaderUniformDataType.INT)
+                rl.DrawMesh(mesh, material, meshTransform)
+                
+                texIndex = 0
+                rl.SetShaderValue(lightingShader, rednessLocation, &texIndex, rl.ShaderUniformDataType.INT)
+                rl.DrawMesh(mesh, material, meshTransform2)
+
+                //rl.DrawMesh(mesh, material2, meshTransform2)
 
                 // Draw the walls
-                rl.DrawModel(staticData.axisAlignedScene, rl.Vector3(0), 1.0, rl.WHITE)
-                rl.DrawModel(staticData.angledScene, rl.Vector3(0), 1.0, rl.WHITE)
+                //rl.DrawModel(staticData.axisAlignedScene, rl.Vector3(0), 1.0, rl.WHITE)
+
+                for mesh, inx in staticData.axisAlignedScene.meshes[:staticData.axisAlignedScene.meshCount] {
+                    meshBb := staticData.sceneAxisAlignedColliders[inx]
+                    tiling := (meshBb.max - meshBb.min)
+                    rl.SetShaderValue(lightingShader, tilingLocation, &tiling, rl.ShaderUniformDataType.VEC3)
+
+                    rl.DrawMesh(mesh, material, staticData.axisAlignedScene.transform)
+                }
+                //rl.DrawModel(staticData.angledScene, rl.Vector3(0), 1.0, rl.WHITE)
 
                 // Draw items
                 for item in get_placed_items(&itemManager) {
