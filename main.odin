@@ -14,18 +14,18 @@ DT :: 1.0 / TPS // Delta time for the simulation
 PLAYER_HEIGHT :: 2.0
 PLAYER_INITIAL_POSITION :: rl.Vector3{-41.0, 1.2, 1.0}
 CAMERA_DISTANCE :: f32(6)
-CAMERA_INITIAL_ROTATION :: f32(0)
+CAMERA_INITIAL_ROTATION :: f32(45)
 CAMERA_HEIGHT_DIFFERENCE :: f32(1.5)
 
-WINDOW_WIDTH :: 1200
-WINDOW_HEIGHT :: 900
+WINDOW_WIDTH :: 900
+WINDOW_HEIGHT :: 720
 SHEET_TILE_SIZE :: 1024
 SHEET_RESIZED_TILE_SIZE :: f32(WINDOW_HEIGHT / 2)
 
 HELD_ITEM_SIZE :: WINDOW_HEIGHT / 6.0
 
 GRAVITY :: 10.0
-SPEED :: 10.0
+SPEED :: 8.0
 SENSITIVITY :: 5.0 // for mouse rotation
 JUMP_FORCE :: 40.0
 
@@ -94,6 +94,7 @@ GameState :: struct {
     availableInteraction: ItemInteraction,
     heldItemGhostPosition: rl.Vector3, //only valid if held item
     shoppingCart: ShoppingCart,
+    win: bool,
 }
 
 StaticData :: struct {
@@ -156,9 +157,9 @@ setup_static_data :: proc() -> StaticData
     //     }
     // }
 
-    cartModel := rl.LoadModelFromMesh(rl.GenMeshCube(1.0, 1.0, 1.0))
+    cartModel := rl.LoadModelFromMesh(rl.GenMeshCube(7.0, 5.0, 1.0))
     shoppingCartData := ShoppingCartStaticData { cartModel, { 
-        ItemDescriptor{.Table, .Huge},
+        ItemDescriptor{.Table, .Green},
         ItemDescriptor{.Chair, .Red},
         ItemDescriptor{.Plant, .Blue},
         ItemDescriptor{.Lamp, .Regular},
@@ -167,7 +168,6 @@ setup_static_data :: proc() -> StaticData
     material_textures := rl.LoadTexture("res/material_textures.png")
     materialIndices := load_texture_indices("res/level_material_indices.json")
 
-    fmt.printfln("materials: %d, meshes: %d", len(materialIndices), axisAlignedScene.meshCount)
     assert(len(materialIndices) == int(axisAlignedScene.meshCount))
 
     return StaticData {
@@ -272,7 +272,7 @@ interpolate_states :: proc(s0: ^GameState, s1: ^GameState, alpha: f32) -> GameSt
     newCart := s0.shoppingCart
     newCart.rigidBody.position = cartPosition
 
-    return GameState {newPlayer, newPitch, newIATimer, s0.availableInteraction, ghostPosition, newCart}
+    return GameState {newPlayer, newPitch, newIATimer, s0.availableInteraction, ghostPosition, newCart, s0.win}
 }
 
 get_camera_view_vector :: proc(state: GameState) -> rl.Vector3
@@ -371,10 +371,10 @@ get_initial_game_state :: proc(staticData: ^StaticData) -> GameState
     playerBody := RigidBody {PLAYER_INITIAL_POSITION, rl.GetModelBoundingBox(staticData.playerModel), {}}
     player := Player {rigidBody=playerBody, rotation=CAMERA_INITIAL_ROTATION}
 
-    cartBody := RigidBody {PLAYER_INITIAL_POSITION + {8.0, 0.0, 0.0}, rl.GetModelBoundingBox(staticData.shoppingCart.model), {}}
+    cartBody := RigidBody {{46, 2.0, 39}, rl.GetModelBoundingBox(staticData.shoppingCart.model), {}}
     cart := ShoppingCart {cartBody, false, {}}
 
-    return GameState {player, 0, 0.0, {}, {}, cart}
+    return GameState {player, 0, 0.0, {}, {}, cart, false}
 }
 
 position_bounding_box :: proc(defaultBb: rl.BoundingBox, position: rl.Vector3) -> rl.BoundingBox {
@@ -623,7 +623,6 @@ update_rigid_body :: proc(
     cBox, collision := TryGetCollidingBox(boxVertical, collisionContext)
     if collision {
         details := get_intersection_details(boxVertical, cBox, linalg.normalize(verticalVelocity))
-        fmt.printfln("intersectionby: %f", details.penetrationDepth)
 
         newBody.position += details.collisionNormal * details.penetrationDepth + rl.EPSILON
         newBody.velocity.y = 0
@@ -669,7 +668,7 @@ move_and_slide :: proc(rigidBody: RigidBody, collisionContext: CollisionContext)
 
         rCollision := check_any_collision(body, collisionContext)
         if rCollision {
-            fmt.printfln("redirected: %f, %f, %f", redirected.x, redirected.y, redirected.z)
+            //fmt.printfln("redirected: %f, %f, %f", redirected.x, redirected.y, redirected.z)
             return rigidBody
         }
     }
@@ -682,14 +681,14 @@ move_and_slide :: proc(rigidBody: RigidBody, collisionContext: CollisionContext)
 
         directionDotNormal := linalg.dot(originalBodyDirection, triangleNormal)
         if directionDotNormal < 0.0 {
-            fmt.printfln("sliding along direction: %f, %f, %f", triangleNormal.x, triangleNormal.y, triangleNormal.z)
+            //fmt.printfln("sliding along direction: %f, %f, %f", triangleNormal.x, triangleNormal.y, triangleNormal.z)
             projectedDirection := originalBodyDirection - triangleNormal * directionDotNormal
 
             body.position += projectedDirection * originalSpeed * DT
 
             slideCollision := check_any_collision(body, collisionContext)
             if slideCollision {
-                fmt.printfln("slide failed in direction: %f, %f, %f", projectedDirection.x, projectedDirection.y, projectedDirection.z)
+                //fmt.printfln("slide failed in direction: %f, %f, %f", projectedDirection.x, projectedDirection.y, projectedDirection.z)
                 return rigidBody
             }
         }
@@ -726,13 +725,26 @@ handle_interaction :: proc(state: GameState, itemInteraction: ItemInteraction, i
     case PlaceableInCart:
         if interaction.status == .Acceptable {
             deposit_active_item_in_cart(itemManager, &stateAfterInteraction.shoppingCart)
+
+
+            if stateAfterInteraction.shoppingCart.items.len == ITEMS_TO_BUY {
+                stateAfterInteraction.win = true
+            }
         }
 
     case PlaceableOnGround:
         if interaction.spotValid {
             place_active_item(itemManager, interaction.spot)
         }
+    case Throw:
+        item := get_active_item(itemManager).?
+        itemManager.activeItem = ItemIdInvalid
 
+        viewVector := get_camera_view_vector(state)
+        newPosition := state.player.rigidBody.position + viewVector * 2.5
+
+        itemManager.items[item.id].rigidBody.position = newPosition
+        itemManager.items[item.id].rigidBody.velocity = viewVector * 30.0
     case NoInteraction:
     }
 
@@ -779,7 +791,7 @@ get_possible_item_interaction :: proc(
     anySpot := collision.hit && collision.distance < INTERACTION_RADIUS + rl.EPSILON
 
     if !anySpot {
-        return NoInteraction{}
+        return Throw{}
     }
 
     cartCollision := rl.GetRayCollisionBox(viewRay, collisionContext.cartCollider)
@@ -848,7 +860,7 @@ create_collision_context :: proc(state: GameState, staticData: ^StaticData, item
         placedItemColliders[i] = get_rigid_body_bounding_box(item.rigidBody)
     }
 
-    //cartBoundingBox := get_rigid_body_bounding_box(state.shoppingCart.rigidBody)
+    cartBoundingBox := get_rigid_body_bounding_box(state.shoppingCart.rigidBody)
 
 
     //colliderSlices := [][]rl.BoundingBox{ placedItemColliders, staticData.sceneAxisAlignedColliders, {cartBoundingBox} }
@@ -856,7 +868,7 @@ create_collision_context :: proc(state: GameState, staticData: ^StaticData, item
 
     return CollisionContext { 
         get_rigid_body_bounding_box(state.player.rigidBody), 
-        {}, 
+        cartBoundingBox, 
         staticData.sceneAxisAlignedColliders,
         placedItemColliders,
         staticData.sceneTriangleColliders,
@@ -899,7 +911,7 @@ FixedUpdate :: proc(previousState: GameState, actions: InputActions, staticData:
     // if grounded and action.jump, add vertical force up to the body, not to the velocity from actions!
     rayToGround := rl.Ray{ currentState.player.rigidBody.position, rl.Vector3{0.0, -1.0, 0.0} }
     groundHit := ray_x_scene(rayToGround, collisionContext)
-    playerGrounded := true//groundHit.hit && groundHit.distance < 1.0 + 0.001
+    playerGrounded := groundHit.hit && groundHit.distance < 1.0 + 0.001
 
     if playerGrounded && actions.jump {
         currentState.player.rigidBody.velocity.y += JUMP_FORCE
@@ -950,6 +962,7 @@ FixedUpdate :: proc(previousState: GameState, actions: InputActions, staticData:
     // Rotation
     if (abs(actions.cameraRotation.x) > rl.EPSILON) {
         rotationAmount := -actions.cameraRotation.x * SENSITIVITY * DT
+        //fmt.println(rotationAmount)
         currentState.player.rotation += rotationAmount
     }
     if (abs(actions.cameraRotation.y) > rl.EPSILON) {
@@ -1001,7 +1014,7 @@ draw_held_item_to_texture :: proc(destinationTexture: ^rl.RenderTexture2D, itemM
 }
 
 main :: proc() {
-    rl.SetConfigFlags({rl.ConfigFlag.MSAA_4X_HINT})
+    rl.SetConfigFlags({rl.ConfigFlag.MSAA_4X_HINT, rl.ConfigFlag.WINDOW_RESIZABLE})
     rl.InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Elbow Grease")
 
     rl.DisableCursor()
@@ -1010,6 +1023,7 @@ main :: proc() {
     lightingShader := rl.LoadShader("res/shaders/basic_lighting.vs", "res/shaders/basic_lighting.fs")
     rednessLocation := rl.GetShaderLocation(lightingShader, strings.clone_to_cstring("textureIndex"))
     tilingLocation := rl.GetShaderLocation(lightingShader, strings.clone_to_cstring("meshDimensions"))
+    variantLocation := rl.GetShaderLocation(lightingShader, strings.clone_to_cstring("variant"))
     texIndex: i32 = 0
     //rl.SetShaderValue(lightingShader, rednessLocation, &redness, rl.ShaderUniformDataType.FLOAT)
 
@@ -1058,6 +1072,9 @@ main :: proc() {
 
     setup_camera(&camera, initialState)
 
+    //fmt.println(camera.position)
+    //fmt.println(camera.target)
+
     handImage := rl.LoadImage("res/hands_sheet.png")
     tiles := handImage.width / SHEET_TILE_SIZE
 
@@ -1078,6 +1095,15 @@ main :: proc() {
     gameloop: for !rl.WindowShouldClose() {
         frameTime := rl.GetFrameTime()
 
+        if currentState.win {
+            rl.BeginDrawing()
+                rl.DrawText(strings.clone_to_cstring("You Win!"), WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2, 60, rl.WHITE)
+                rl.DrawText(strings.clone_to_cstring("press \"ESC\" to close the game"), WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2 + 60, 20, rl.WHITE)
+            rl.EndDrawing()
+
+            continue;
+        }
+
         actions = poll_actions_raw() if fixedUpdateRanLastFrame else poll_actions_inherit_queuable(actions)
         fixedUpdateRanLastFrame = false
 
@@ -1096,6 +1122,8 @@ main :: proc() {
 
         /// From this point on, renderState should be used instead of current/prev state
         setup_camera(&camera, renderState)
+        //fmt.println(renderState.cameraPitch)
+        // fmt.println(camera.target)
 
         rl.BeginDrawing()
             rl.ClearBackground(rl.RAYWHITE)
@@ -1103,13 +1131,13 @@ main :: proc() {
 
                 tilingDefault := rl.Vector3(1.0)
                 rl.SetShaderValue(lightingShader, tilingLocation, &tilingDefault, rl.ShaderUniformDataType.VEC3)
-                texIndex = 1
-                rl.SetShaderValue(lightingShader, rednessLocation, &texIndex, rl.ShaderUniformDataType.INT)
-                rl.DrawMesh(mesh, material, meshTransform)
-                
-                texIndex = 0
-                rl.SetShaderValue(lightingShader, rednessLocation, &texIndex, rl.ShaderUniformDataType.INT)
-                rl.DrawMesh(mesh, material, meshTransform2)
+                // texIndex = 1
+                // rl.SetShaderValue(lightingShader, rednessLocation, &texIndex, rl.ShaderUniformDataType.INT)
+                // rl.DrawMesh(mesh, material, meshTransform)
+                // 
+                // texIndex = 0
+                // rl.SetShaderValue(lightingShader, rednessLocation, &texIndex, rl.ShaderUniformDataType.INT)
+                // rl.DrawMesh(mesh, material, meshTransform2)
 
                 //rl.DrawMesh(mesh, material2, meshTransform2)
 
@@ -1129,15 +1157,27 @@ main :: proc() {
                 }
                 //rl.DrawModel(staticData.angledScene, rl.Vector3(0), 1.0, rl.WHITE)
 
+                texIndex = 1
+                rl.SetShaderValue(lightingShader, rednessLocation, &texIndex, rl.ShaderUniformDataType.INT)
                 // Draw items
                 for item in get_placed_items(&itemManager) {
-                    //fmt.println(item.rigidBody.position)
-                    rl.DrawModel(itemManager.itemModels[item.descriptor.type], item.rigidBody.position, 1.0, rl.WHITE)
+                    itemModel := itemManager.itemModels[item.descriptor.type]
+
+                    variant := item.descriptor.variant
+                    rl.SetShaderValue(lightingShader, variantLocation, &variant, rl.ShaderUniformDataType.INT)
+
+                    pos := item.rigidBody.position
+                    transform := rl.MatrixTranslate(pos.x, pos.y, pos.z)
+                    for meshh in itemModel.meshes[:itemModel.meshCount] {
+                        rl.DrawMesh(meshh, material, transform)
+                    }
+                    // //fmt.println(item.rigidBody.position)
+                    // rl.DrawModel(itemManager.itemModels[item.descriptor.type], item.rigidBody.position, 1.0, rl.WHITE)
                     //rl.DrawBoundingBox(itemManager.itemColliders[item.id], rl.BLUE)
                 }
 
                 // Draw shopping cart
-                rl.DrawModel(staticData.shoppingCart.model, renderState.shoppingCart.rigidBody.position, 1.0, rl.WHITE)
+                rl.DrawModel(staticData.shoppingCart.model, renderState.shoppingCart.rigidBody.position, 1.0, rl.BROWN)
 
                 // Draw ghost of placeable item
                 if placeOnGround, ok := renderState.availableInteraction.(PlaceableOnGround); ok {
@@ -1156,10 +1196,10 @@ main :: proc() {
                 draw_held_item_to_texture(&heldItemTexture, itemManager.itemModels[item.descriptor.type], rl.GetTime())
             }
 
-            rl.DrawFPS(50, 50)
+            rl.DrawFPS(20, 20)
 
-            itemInHandMessage := fmt.tprintf("in hand: %d", itemManager.activeItem)
-            rl.DrawText(strings.clone_to_cstring(itemInHandMessage), 50, 70, 20, rl.BLACK)
+            // itemInHandMessage := fmt.tprintf("position: %x", renderState.player.rigidBody.position)
+            // rl.DrawText(strings.clone_to_cstring(itemInHandMessage), 50, 70, 20, rl.BLACK)
 
             handState: HandState = HandHoldingItem{1, heldItemTexture.texture} if itemInHand else EmptyHand{0}
             draw_hand(handTex, renderState.interactAnimationTimer, handState)
@@ -1180,6 +1220,8 @@ main :: proc() {
                 }
             case PlaceableOnGround:
                 message = "Press \"E\" to place the item on the ground" if interaction.spotValid else "The item cannot be placed here"
+            case Throw:
+                message = "Press \"E\" to throw the item"
             case NoInteraction:
             }
 

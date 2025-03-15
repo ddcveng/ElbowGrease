@@ -19,7 +19,7 @@ ItemVariant :: enum
     Regular,
     Red,
     Blue,
-    Huge,
+    Green,
     Rare,
 }
 
@@ -230,11 +230,13 @@ PlaceableInCart :: struct {
 }
 
 NoInteraction :: struct {}
+Throw :: struct {}
 
 ItemInteraction :: union #no_nil {
     NoInteraction,
     InteractableItem,
     PlaceableOnGround,
     PlaceableInCart,
+    Throw,
 }
 

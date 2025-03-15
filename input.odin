@@ -2,6 +2,8 @@ package jamgame
 
 //import "core:container/queue"
 import rl "vendor:raylib"
+import "core:math/linalg"
+import "core:fmt"
 
 MoveDirection :: enum {
     Forward, 
@@ -30,6 +32,10 @@ poll_actions_inherit_queuable :: proc(previousActions: InputActions) -> InputAct
 
     return actions
 }
+
+firstMouseDelta := rl.Vector2(0)
+mouseMoved := false
+firstMouse := true
 
 poll_actions_raw :: proc() -> InputActions
 {
@@ -65,6 +71,27 @@ poll_actions_raw :: proc() -> InputActions
 
     // Camera rotation
     mouseDelta := rl.GetMouseDelta()
+    // fmt.println("mouse before")
+    // fmt.println(mouseDelta)
+    // if !mouseMoved {
+    //     if firstMouse {
+    //         firstMouseDelta = mouseDelta
+    //         mouseDelta = rl.Vector2(0)
+    //         firstMouse = false
+    //     }
+    //     else {
+    //         diff := mouseDelta - firstMouseDelta
+    //         if linalg.length2(diff) > rl.EPSILON {
+    //             mouseMoved = true
+    //         }
+    //         else {
+    //             mouseDelta = rl.Vector2(0)
+    //         }
+    //
+    //     }
+    // }
+    // fmt.println("mouse after")
+    // fmt.println(mouseDelta)
     actions.cameraRotation = CameraRotation(mouseDelta)
 
     // Interact

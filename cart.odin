@@ -33,7 +33,7 @@ CartItemStatus :: enum {
 can_place_in_shopping_cart :: proc(cartStatic: ^ShoppingCartStaticData, cart: ShoppingCart, itemDescriptor: ItemDescriptor) -> CartItemStatus
 {
     cartAcceptsItem := slice.contains(cartStatic.shoppingList[:], itemDescriptor)
-    // @refactor; this is really sketchy??
+    
     myItems := cart.items
     itemInCart := slice.contains(small_array.slice(&myItems), itemDescriptor)
 
