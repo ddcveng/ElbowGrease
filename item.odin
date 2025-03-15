@@ -2,6 +2,9 @@ package jamgame
 
 import rl "vendor:raylib"
 import "core:slice"
+import "core:fmt"
+import "core:encoding/json"
+import "core:os"
 
 ItemType :: enum 
 {
@@ -13,9 +16,11 @@ ItemType :: enum
 
 ItemVariant :: enum 
 {
+    Regular,
     Red,
     Blue,
     Huge,
+    Rare,
 }
 
 ItemDescriptor :: struct 
@@ -62,6 +67,63 @@ create_item_manager :: proc() -> ItemManager
     }
 
     return manager
+}
+
+load_items_from_file :: proc(manager: ^ItemManager, filename: string)
+{
+    data, ok := os.read_entire_file_from_filename(filename)
+    if !ok {
+        fmt.eprintfln("Failed to load the file %s !", filename)
+        return
+    }
+    defer delete(data)
+
+    json_data, err := json.parse(data)
+    if err != .None {
+            fmt.eprintln("Failed to parse the json file.")
+            fmt.eprintln("Error:", err)
+            return
+    }
+    defer json.destroy_value(json_data)
+
+    // Access the Root Level Object
+    root := json_data.(json.Object)
+
+    nodes := root["nodes"].(json.Array)
+
+    itemPositions: [dynamic]Point3
+    itemDescriptors: [dynamic]ItemDescriptor
+
+    for node in nodes {
+        nodeObj := node.(json.Object)
+        extras := nodeObj["extras"].(json.Object)
+
+        itemType, hasType := extras["ItemType"].(json.Float)
+        if !hasType {
+            itemType = f64(ItemType.Table)
+        }
+
+        itemVariant, hasVariant := extras["ItemVariant"].(json.Float)
+        if !hasVariant {
+            itemVariant = f64(ItemVariant.Regular)
+        }
+
+        descriptor := ItemDescriptor{ItemType(itemType), ItemVariant(itemVariant)}
+        append(&itemDescriptors, descriptor)
+
+        positionArr, hasPosition := nodeObj["translation"].(json.Array)
+        position := Point3(0)
+        if hasPosition {
+            position.x = f32(positionArr[0].(json.Float))
+            position.y = f32(positionArr[1].(json.Float))
+            position.z = f32(positionArr[2].(json.Float))
+        }
+        append(&itemPositions, position)
+    }
+
+    for i in 0..<len(itemPositions) {
+        create_item(manager, itemPositions[i], itemDescriptors[i])
+    }
 }
 
 can_pickup_item :: proc(manager: ^ItemManager) -> bool

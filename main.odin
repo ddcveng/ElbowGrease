@@ -25,7 +25,7 @@ SHEET_RESIZED_TILE_SIZE :: f32(WINDOW_HEIGHT / 2)
 HELD_ITEM_SIZE :: WINDOW_HEIGHT / 6.0
 
 GRAVITY :: 10.0
-SPEED :: 7.0
+SPEED :: 10.0
 SENSITIVITY :: 5.0 // for mouse rotation
 JUMP_FORCE :: 40.0
 
@@ -159,6 +159,9 @@ setup_static_data :: proc() -> StaticData
 
     material_textures := rl.LoadTexture("res/material_textures.png")
     materialIndices := load_texture_indices("res/level_material_indices.json")
+
+    fmt.printfln("materials: %d, meshes: %d", len(materialIndices), axisAlignedScene.meshCount)
+    assert(len(materialIndices) == int(axisAlignedScene.meshCount))
 
     return StaticData {
         playerModel, playerBoundingBox, 
@@ -873,7 +876,7 @@ FixedUpdate :: proc(previousState: GameState, actions: InputActions, staticData:
     // if grounded and action.jump, add vertical force up to the body, not to the velocity from actions!
     rayToGround := rl.Ray{ currentState.player.rigidBody.position, rl.Vector3{0.0, -1.0, 0.0} }
     groundHit := ray_x_scene(rayToGround, collisionContext)
-    playerGrounded := groundHit.hit && groundHit.distance < 1.0 + 0.001
+    playerGrounded := true//groundHit.hit && groundHit.distance < 1.0 + 0.001
 
     if playerGrounded && actions.jump {
         currentState.player.rigidBody.velocity.y += JUMP_FORCE
@@ -962,13 +965,10 @@ draw_held_item_to_texture :: proc(destinationTexture: ^rl.RenderTexture2D, itemM
 
 main :: proc() {
     rl.SetConfigFlags({rl.ConfigFlag.MSAA_4X_HINT})
-    rl.InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "ikea gamer")
+    rl.InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Elbow Grease")
 
     rl.DisableCursor()
     rl.SetTargetFPS(FPS)
-
-    textureIndices := load_texture_indices("res/testjson.json")
-    fmt.println(textureIndices)
     
     lightingShader := rl.LoadShader("res/shaders/basic_lighting.vs", "res/shaders/basic_lighting.fs")
     rednessLocation := rl.GetShaderLocation(lightingShader, strings.clone_to_cstring("textureIndex"))
@@ -1004,11 +1004,12 @@ main :: proc() {
     rl.SetMaterialTexture(&material, rl.MaterialMapIndex.ALBEDO, staticData.material_texture_atlas)
 
     itemManager := create_item_manager()
-    create_item(&itemManager, PLAYER_INITIAL_POSITION + rl.Vector3{2.0, 0.0, 0}, { .Lamp, .Huge })
-    create_item(&itemManager, PLAYER_INITIAL_POSITION + rl.Vector3{2.0, 0.0, 2}, { .Table, .Huge })
-    create_item(&itemManager, PLAYER_INITIAL_POSITION + rl.Vector3{2.0, 0.0, 4}, { .Plant, .Huge })
-    create_item(&itemManager, PLAYER_INITIAL_POSITION + rl.Vector3{4.0, 0.0, 4}, { .Chair, .Huge })
-
+    load_items_from_file(&itemManager, "res/items.json")
+    // create_item(&itemManager, PLAYER_INITIAL_POSITION + rl.Vector3{2.0, 0.0, 0}, { .Lamp, .Huge })
+    // create_item(&itemManager, PLAYER_INITIAL_POSITION + rl.Vector3{2.0, 0.0, 2}, { .Table, .Huge })
+    // create_item(&itemManager, PLAYER_INITIAL_POSITION + rl.Vector3{2.0, 0.0, 4}, { .Plant, .Huge })
+    // create_item(&itemManager, PLAYER_INITIAL_POSITION + rl.Vector3{4.0, 0.0, 4}, { .Chair, .Huge })
+    //
 
     cameraMode := rl.CameraMode.FIRST_PERSON
     camera := rl.Camera3D { 
@@ -1082,8 +1083,12 @@ main :: proc() {
                     meshBb := staticData.sceneAxisAlignedColliders[inx]
                     tiling := (meshBb.max - meshBb.min)
                     rl.SetShaderValue(lightingShader, tilingLocation, &tiling, rl.ShaderUniformDataType.VEC3)
+                    texIndex := staticData.meshTextureIndices[inx]
+                    rl.SetShaderValue(lightingShader, rednessLocation, &texIndex, rl.ShaderUniformDataType.INT)
+
 
                     rl.DrawMesh(mesh, material, staticData.axisAlignedScene.transform)
+                    //rl.DrawBoundingBox(meshBb, rl.WHITE)
                 }
                 //rl.DrawModel(staticData.angledScene, rl.Vector3(0), 1.0, rl.WHITE)
 
