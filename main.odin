@@ -710,6 +710,18 @@ ray_x_scene :: proc (ray: rl.Ray, collisionContext: CollisionContext) -> rl.RayC
         }
     }
 
+    for box, i in collisionContext.itemColliders {
+        if collisionContext.ignoredItem == ItemId(i) {
+            continue
+        }
+
+        collision := rl.GetRayCollisionBox(ray, box)
+        if collision.hit && collision.distance < minHitDistance {
+            minHitDistance = collision.distance
+            closestHit = collision
+        }
+    }
+
     return closestHit    
 }
 
@@ -909,9 +921,24 @@ FixedUpdate :: proc(previousState: GameState, actions: InputActions, staticData:
 
     // for jumping find ray scene hit to ground. if its close enough say we are grounded.
     // if grounded and action.jump, add vertical force up to the body, not to the velocity from actions!
-    rayToGround := rl.Ray{ currentState.player.rigidBody.position, rl.Vector3{0.0, -1.0, 0.0} }
-    groundHit := ray_x_scene(rayToGround, collisionContext)
-    playerGrounded := groundHit.hit && groundHit.distance < 1.0 + 0.001
+    playerBb := get_rigid_body_bounding_box(currentState.player.rigidBody)
+    positionBottomLeft := playerBb.min
+    positionBottomRight := Point3 { playerBb.max.x, playerBb.min.y, playerBb.min.z }
+    positionTopLeft := Point3 { playerBb.min.x, playerBb.min.y, playerBb.max.z }
+    positionTopRight := Point3 { playerBb.max.x, playerBb.min.y, playerBb.max.z }
+    positionCenter := (positionTopRight - positionBottomLeft) / 2 + positionBottomLeft
+
+    playerGrounded := false
+
+    positions := []Point3 {positionBottomLeft, positionBottomRight, positionTopLeft, positionTopRight, positionCenter}
+    for position in positions {
+        rayToGround := rl.Ray{ position, rl.Vector3{0.0, -1.0, 0.0} }
+        groundHit := ray_x_scene(rayToGround, collisionContext)
+        if groundHit.hit && groundHit.distance < 1.0 + 0.001 {
+            playerGrounded = true
+            break
+        }
+    }
 
     if playerGrounded && actions.jump {
         currentState.player.rigidBody.velocity.y += JUMP_FORCE
