@@ -4,8 +4,7 @@ import "core:fmt"
 import "core:encoding/json"
 import "core:os"
 
-load_texture_indices :: proc(jsonFile: string) -> []TextureIndex
-{
+load_texture_indices :: proc(jsonFile: string) -> []TextureIndex {
     data, ok := os.read_entire_file_from_filename(jsonFile)
     if !ok {
         fmt.eprintfln("Failed to load the file %s !", jsonFile)
@@ -31,8 +30,8 @@ load_texture_indices :: proc(jsonFile: string) -> []TextureIndex
         nodeObj := node.(json.Object)
         extras := nodeObj["extras"].(json.Object)
 
-        texIndex, ok := extras["TextureIndex"].(json.Float)
-        if !ok {
+        texIndex, okk := extras["TextureIndex"].(json.Float)
+        if !okk {
             // If no texture index, default to this
             texIndex = f64(TextureIndex.BlueMetal)
         }

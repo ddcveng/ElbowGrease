@@ -6,16 +6,14 @@ import "core:fmt"
 import "core:encoding/json"
 import "core:os"
 
-ItemType :: enum 
-{
+ItemType :: enum {
     Lamp,
     Chair,
     Table,
-    Plant
+    Plant,
 }
 
-ItemVariant :: enum 
-{
+ItemVariant :: enum {
     Regular,
     Red,
     Blue,
@@ -23,8 +21,7 @@ ItemVariant :: enum
     Rare,
 }
 
-ItemDescriptor :: struct 
-{
+ItemDescriptor :: struct {
     type: ItemType, 
     variant: ItemVariant,
 }
@@ -32,8 +29,7 @@ ItemDescriptor :: struct
 ItemId :: distinct int
 ItemIdInvalid :: ItemId(-1)
 
-Item :: struct 
-{
+Item :: struct {
     id: ItemId,
     rigidBody: RigidBody,
     descriptor: ItemDescriptor,
@@ -41,8 +37,7 @@ Item :: struct
 
 MAX_ITEMS :: 128
 
-ItemManager :: struct 
-{
+ItemManager :: struct {
     items: [MAX_ITEMS]Item,
     itemModels: [ItemType]rl.Model,
     itemColliders: [MAX_ITEMS]rl.BoundingBox,
@@ -51,8 +46,7 @@ ItemManager :: struct
     itemIdCounter: int,
 }
 
-create_item_manager :: proc() -> ItemManager
-{
+create_item_manager :: proc() -> ItemManager {
     manager := ItemManager {}
 
     manager.itemModels[.Table] = rl.LoadModel("res/scenes/table.glb")
@@ -69,8 +63,7 @@ create_item_manager :: proc() -> ItemManager
     return manager
 }
 
-load_items_from_file :: proc(manager: ^ItemManager, filename: string)
-{
+load_items_from_file :: proc(manager: ^ItemManager, filename: string) {
     data, ok := os.read_entire_file_from_filename(filename)
     if !ok {
         fmt.eprintfln("Failed to load the file %s !", filename)
@@ -126,13 +119,11 @@ load_items_from_file :: proc(manager: ^ItemManager, filename: string)
     }
 }
 
-can_pickup_item :: proc(manager: ^ItemManager) -> bool
-{
+can_pickup_item :: proc(manager: ^ItemManager) -> bool {
     return manager.activeItem == ItemIdInvalid
 }
 
-get_active_item :: proc(manager: ^ItemManager) -> Maybe(Item)
-{
+get_active_item :: proc(manager: ^ItemManager) -> Maybe(Item) {
     if manager.activeItem == ItemIdInvalid {
         return nil
     } 
@@ -140,8 +131,7 @@ get_active_item :: proc(manager: ^ItemManager) -> Maybe(Item)
     return manager.items[manager.activeItem]
 }
 
-create_item :: proc(manager: ^ItemManager, itemPosition: Point3, itemDescriptor: ItemDescriptor) -> Item
-{
+create_item :: proc(manager: ^ItemManager, itemPosition: Point3, itemDescriptor: ItemDescriptor) -> Item {
     if manager.itemIdCounter >= MAX_ITEMS {
         panic("Maximum item amount reached!")
     }
@@ -162,8 +152,7 @@ create_item :: proc(manager: ^ItemManager, itemPosition: Point3, itemDescriptor:
 // picked up    no collisions, can be placed or put in the cart on interact (only 1 item picked up at a time)
 // and in cart  no collitions, cannot be picked up - final state, can only be put here if the shopping list contains an item like this
 
-pickup_item :: proc(manager: ^ItemManager, id: ItemId) -> Item
-{
+pickup_item :: proc(manager: ^ItemManager, id: ItemId) -> Item {
     if manager.activeItem != ItemIdInvalid {
         panic("Cannot pickup 2 items at the same time")
     }
@@ -177,8 +166,7 @@ pickup_item :: proc(manager: ^ItemManager, id: ItemId) -> Item
     return item
 }
 
-place_active_item :: proc(manager: ^ItemManager, position: Point3) 
-{
+place_active_item :: proc(manager: ^ItemManager, position: Point3) {
     assert(manager.activeItem != ItemIdInvalid)
 
     manager.items[manager.activeItem].rigidBody.position = position
@@ -187,8 +175,7 @@ place_active_item :: proc(manager: ^ItemManager, position: Point3)
     manager.activeItem = ItemIdInvalid
 }
 
-deposit_active_item_in_cart :: proc(manager: ^ItemManager, cart: ^ShoppingCart)
-{
+deposit_active_item_in_cart :: proc(manager: ^ItemManager, cart: ^ShoppingCart) {
     assert(manager.activeItem != ItemIdInvalid)
 
     item := manager.items[manager.activeItem]
@@ -199,8 +186,7 @@ deposit_active_item_in_cart :: proc(manager: ^ItemManager, cart: ^ShoppingCart)
     manager.activeItem = ItemIdInvalid
 }
 
-get_placed_items :: proc(manager: ^ItemManager) -> []Item
-{
+get_placed_items :: proc(manager: ^ItemManager) -> []Item {
     allItems := slice.clone(manager.items[:])
 
     // Specially disable the currently held item

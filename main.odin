@@ -112,8 +112,7 @@ StaticData :: struct {
     meshTextureIndices: []TextureIndex, // The texture index at index i of this array corresponds to the mesh at index i in the model.
 }
 
-setup_static_data :: proc() -> StaticData
-{
+setup_static_data :: proc() -> StaticData {
     // @collision having the player be a non-cube/ sphere may require changes to the collision detection logic
     // probably boxes work fine, but the triangle radius might not be sufficient
     playerModel := rl.LoadModelFromMesh(rl.GenMeshCube(1.0, PLAYER_HEIGHT, 1.0))
@@ -176,7 +175,7 @@ setup_static_data :: proc() -> StaticData
         colliders, {},
         shoppingCartData,
         material_textures,
-        materialIndices
+        materialIndices,
     }
 }
 
@@ -198,9 +197,8 @@ ANIMATION_LENGHT :: f32(0.4)
 ANIMATED_ROTATION :: 30 // in degrees
 HAND_X_OFFSET :: 200
 
-draw_hand :: proc(handTex: rl.Texture2D, animationT: f32, handState: HandState)
-{
-    scale := f32(1)
+draw_hand :: proc(handTex: rl.Texture2D, animationT: f32, handState: HandState) {
+    //scale := f32(1)
     rotation := f32(0)
 
     if animationT > rl.EPSILON {
@@ -275,8 +273,7 @@ interpolate_states :: proc(s0: ^GameState, s1: ^GameState, alpha: f32) -> GameSt
     return GameState {newPlayer, newPitch, newIATimer, s0.availableInteraction, ghostPosition, newCart, s0.win}
 }
 
-get_camera_view_vector :: proc(state: GameState) -> rl.Vector3
-{
+get_camera_view_vector :: proc(state: GameState) -> rl.Vector3 {
     playerFacingDirection := get_player_forward(state.player)
     targetXZ := rl.Vector3 {playerFacingDirection.x, 0, playerFacingDirection.y}
     playerSideways := get_player_sideways(state.player)
@@ -286,17 +283,24 @@ get_camera_view_vector :: proc(state: GameState) -> rl.Vector3
     return linalg.normalize(viewVector)
 }
 
-get_player_head_position :: proc(player: Player) -> rl.Vector3
-{
+get_player_head_position :: proc(player: Player) -> rl.Vector3 {
     // anchor the camera at the top of the player bounding box
     return player.rigidBody.position //+ PLAYER_HEIGHT / 2.0
 }
 
 //first person camera
-setup_camera :: proc(camera: ^rl.Camera, state: GameState)
-{
-    camera.position = get_player_head_position(state.player)
-    camera.target = camera.position + get_camera_view_vector(state)
+setup_camera :: proc(state: GameState) -> rl.Camera3D {
+    position := get_player_head_position(state.player)
+    target := position + get_camera_view_vector(state)
+
+    camera := rl.Camera3D { 
+        position,
+        target,
+        rl.Vector3 {0.0, 1.0, 0.0},
+        45.0,
+        rl.CameraProjection.PERSPECTIVE }
+
+    return camera
 }
 
 // get_camera_position :: proc(player: Player, cameraData: PlayerFollowingCamera) -> rl.Vector3 {
@@ -343,8 +347,7 @@ get_movement_direction_from_input :: proc() -> rl.Vector2 {
 }
 
 
-get_forward_input_force :: proc(player: Player) -> Force
-{
+get_forward_input_force :: proc(player: Player) -> Force {
     movementFromInput := get_movement_direction_from_input()
     forwardVector := get_player_forward(player)
     forward3d := rl.Vector3 { forwardVector.x, 0, forwardVector.y }
@@ -352,8 +355,7 @@ get_forward_input_force :: proc(player: Player) -> Force
     return Force { movementFromInput.x * SPEED * forward3d, true } 
 }
 
-get_sideways_input_force :: proc(player: Player) -> Force
-{
+get_sideways_input_force :: proc(player: Player) -> Force {
     movementFromInput := get_movement_direction_from_input()
     sidewaysVector := get_player_sideways(player)
     sideways3d := rl.Vector3 { sidewaysVector.x, 0, sidewaysVector.y }
@@ -361,13 +363,11 @@ get_sideways_input_force :: proc(player: Player) -> Force
     return Force { movementFromInput.y * SPEED *sideways3d, true } 
 }
 
-get_gravity_force :: proc() -> Force
-{
+get_gravity_force :: proc() -> Force {
     return Force {rl.Vector3{0, -GRAVITY, 0}, false}
 } 
 
-get_initial_game_state :: proc(staticData: ^StaticData) -> GameState
-{
+get_initial_game_state :: proc(staticData: ^StaticData) -> GameState {
     playerBody := RigidBody {PLAYER_INITIAL_POSITION, rl.GetModelBoundingBox(staticData.playerModel), {}}
     player := Player {rigidBody=playerBody, rotation=CAMERA_INITIAL_ROTATION}
 
@@ -380,28 +380,26 @@ get_initial_game_state :: proc(staticData: ^StaticData) -> GameState
 position_bounding_box :: proc(defaultBb: rl.BoundingBox, position: rl.Vector3) -> rl.BoundingBox {
     bbWithMinAtOrigin := rl.BoundingBox{
         rl.Vector3(0),
-        defaultBb.max - defaultBb.min
+        defaultBb.max - defaultBb.min,
     }
 
     centerPoint := bbWithMinAtOrigin.max / 2.0
     bbCenteredAroundOrigin := rl.BoundingBox {
         bbWithMinAtOrigin.min - centerPoint,
-        bbWithMinAtOrigin.max - centerPoint
+        bbWithMinAtOrigin.max - centerPoint,
     }
 
     return rl.BoundingBox { 
         bbCenteredAroundOrigin.min + position, 
-        bbCenteredAroundOrigin.max + position 
+        bbCenteredAroundOrigin.max + position,
     }
 }
 
-get_rigid_body_bounding_box :: proc(body: RigidBody) -> rl.BoundingBox
-{
+get_rigid_body_bounding_box :: proc(body: RigidBody) -> rl.BoundingBox {
     return position_bounding_box(body.boundingBox, body.position)
 }
 
-TryGetCollidingBox :: proc(playerBb: rl.BoundingBox, collisionContext: CollisionContext) -> (rl.BoundingBox, bool)
-{
+TryGetCollidingBox :: proc(playerBb: rl.BoundingBox, collisionContext: CollisionContext) -> (rl.BoundingBox, bool) {
     for collider in collisionContext.sceneColliders {
         colliding := rl.CheckCollisionBoxes(playerBb, collider)
         if colliding {
@@ -424,8 +422,7 @@ TryGetCollidingBox :: proc(playerBb: rl.BoundingBox, collisionContext: Collision
 }
 
 PLAYER_COLLIDER_RADIUS :: f32(1.0)
-TryGetCollidingTriangleNormal :: proc(playerPosition: Point3, triangles: []Triangle) -> (rl.Vector3, bool)
-{
+TryGetCollidingTriangleNormal :: proc(playerPosition: Point3, triangles: []Triangle) -> (rl.Vector3, bool) {
     for tri in triangles {
         closestPoint := closest_point_on_triangle(playerPosition, tri.x, tri.y, tri.z)
         distance := linalg.length(playerPosition - closestPoint)
@@ -442,16 +439,15 @@ TryGetCollidingTriangleNormal :: proc(playerPosition: Point3, triangles: []Trian
     return {}, false
 }
 
-check_any_collision :: proc(rigidBody: RigidBody, collisionContext: CollisionContext) -> bool
-{
+check_any_collision :: proc(rigidBody: RigidBody, collisionContext: CollisionContext) -> bool {
     bodyBox := position_bounding_box(rigidBody.boundingBox, rigidBody.position)
-    box, collision := TryGetCollidingBox(bodyBox, collisionContext)
+    _, collision := TryGetCollidingBox(bodyBox, collisionContext)
     if collision {
         return true
     }
 
     //playerPosition := (playerBb.max - playerBb.min) / 2
-    n, triCollision := TryGetCollidingTriangleNormal(rigidBody.position, collisionContext.sceneTriangleColliders)
+    _, triCollision := TryGetCollidingTriangleNormal(rigidBody.position, collisionContext.sceneTriangleColliders)
     return triCollision
 }
 
@@ -474,8 +470,7 @@ Interval :: struct {
     max: f32,
 }
 
-IntervalOverlap :: proc(first, second: Interval) -> (overlap: f32, orientation: bool)
-{
+IntervalOverlap :: proc(first, second: Interval) -> (overlap: f32, orientation: bool) {
     firstIsToTheLeft := first.min < second.min
 
     separateLength := (first.max - first.min) + (second.max - second.min)
@@ -495,8 +490,7 @@ IntersectionDetails :: struct {
     penetrationDepth: f32,
 }
 
-get_intersection_details :: proc(box1, box2: rl.BoundingBox, movementDirection: rl.Vector3) -> IntersectionDetails
-{
+get_intersection_details :: proc(box1, box2: rl.BoundingBox, movementDirection: rl.Vector3) -> IntersectionDetails {
     xOverlap, xOrientation := IntervalOverlap(Interval{box1.min.x, box1.max.x}, Interval{box2.min.x, box2.max.x})
     yOverlap, yOrientation := IntervalOverlap(Interval{box1.min.y, box1.max.y}, Interval{box2.min.y, box2.max.y})
     zOverlap, zOrientation := IntervalOverlap(Interval{box1.min.z, box1.max.z}, Interval{box2.min.z, box2.max.z})
@@ -505,12 +499,10 @@ get_intersection_details :: proc(box1, box2: rl.BoundingBox, movementDirection: 
     yNormal := rl.Vector3{0, -1 if yOrientation else 1, 0}
     zNormal := rl.Vector3{0, 0, -1 if zOrientation else 1}
 
-    if xOverlap < yOverlap && xOverlap < zOverlap 
-    {
+    if xOverlap < yOverlap && xOverlap < zOverlap {
         secondSmallest := yOverlap if yOverlap < zOverlap else zOverlap
         penetrationDifference := secondSmallest - xOverlap
-        if penetrationDifference < NORMAL_CONFIDENCE_TRESHOLD
-        {
+        if penetrationDifference < NORMAL_CONFIDENCE_TRESHOLD {
             otherNormal := yNormal if yOverlap < zOverlap else zNormal
             otherOverlap := min(yOverlap, zOverlap)
 
@@ -524,12 +516,11 @@ get_intersection_details :: proc(box1, box2: rl.BoundingBox, movementDirection: 
         return { xNormal, xOverlap }
     }
 
-    if zOverlap < yOverlap && zOverlap < xOverlap
-    {
+    if zOverlap < yOverlap && zOverlap < xOverlap {
         secondSmallest := yOverlap if yOverlap < xOverlap else xOverlap
         penetrationDifference := secondSmallest - zOverlap
-        if penetrationDifference < NORMAL_CONFIDENCE_TRESHOLD
-        {
+
+        if penetrationDifference < NORMAL_CONFIDENCE_TRESHOLD {
             otherNormal := yNormal if yOverlap < xOverlap else xNormal
             otherOverlap := min(yOverlap, xOverlap)
 
@@ -545,8 +536,7 @@ get_intersection_details :: proc(box1, box2: rl.BoundingBox, movementDirection: 
 
     secondSmallest := zOverlap if zOverlap < xOverlap else xOverlap
     penetrationDifference := secondSmallest - yOverlap
-    if penetrationDifference < NORMAL_CONFIDENCE_TRESHOLD
-    {
+    if penetrationDifference < NORMAL_CONFIDENCE_TRESHOLD {
         otherNormal := zNormal if zOverlap < xOverlap else xNormal
         otherOverlap := min(zOverlap, xOverlap)
 
@@ -560,13 +550,11 @@ get_intersection_details :: proc(box1, box2: rl.BoundingBox, movementDirection: 
     return {yNormal, yOverlap}
 }
 
-GetNormalOfCollidedFace :: proc(box1, box2: rl.BoundingBox, movementDirection: rl.Vector3) -> rl.Vector3
-{
+GetNormalOfCollidedFace :: proc(box1, box2: rl.BoundingBox, movementDirection: rl.Vector3) -> rl.Vector3 {
     return get_intersection_details(box1, box2, movementDirection).collisionNormal
 }
 
-GetWallSlidingDirection :: proc(playerBox, collisioxBox: rl.BoundingBox, movementDirection: rl.Vector3) -> rl.Vector3
-{
+GetWallSlidingDirection :: proc(playerBox, collisioxBox: rl.BoundingBox, movementDirection: rl.Vector3) -> rl.Vector3 {
     collisionNormal := GetNormalOfCollidedFace(playerBox, collisioxBox, movementDirection)
     
     directionDotNormal := linalg.dot(movementDirection, collisionNormal)
@@ -609,12 +597,13 @@ RigidBody :: struct {
 update_rigid_body :: proc(
     body: RigidBody,
     collisionContext: CollisionContext,
-    instantVelocity: rl.Vector3 = rl.Vector3(0)) -> RigidBody
-{
+    instantVelocity: rl.Vector3 = rl.Vector3(0)) -> RigidBody {
     newBody := body
+    newBody.velocity *= VELOCITY_DECAY_MULTIPLIER // TODO: Not sure where to put this thing so the integration works okay?
 
     gravity := rl.Vector3 {0.0, -1.0, 0.0} * GRAVITY
     velocity := newBody.velocity + gravity + instantVelocity 
+    //velocity *= VELOCITY_DECAY_MULTIPLIER
 
     verticalVelocity := rl.Vector3{0, velocity.y, 0}
     newBody.position += verticalVelocity * DT
@@ -639,13 +628,12 @@ update_rigid_body :: proc(
     horizontalBodyAfter := move_and_slide(horizontalBodyBefore, collisionContext)
 
     newBody.position = horizontalBodyAfter.position
-    newBody.velocity *= VELOCITY_DECAY_MULTIPLIER
+    //newBody.velocity *= VELOCITY_DECAY_MULTIPLIER
 
     return newBody
 }
 
-move_and_slide :: proc(rigidBody: RigidBody, collisionContext: CollisionContext) -> RigidBody
-{
+move_and_slide :: proc(rigidBody: RigidBody, collisionContext: CollisionContext) -> RigidBody {
     if abs(rigidBody.velocity.x) < rl.EPSILON \
     && abs(rigidBody.velocity.y) < rl.EPSILON \
     && abs(rigidBody.velocity.z) < rl.EPSILON {
@@ -659,8 +647,7 @@ move_and_slide :: proc(rigidBody: RigidBody, collisionContext: CollisionContext)
 
     playerBbAfterMove := position_bounding_box(body.boundingBox, body.position)
     collidedBox, collision := TryGetCollidingBox(playerBbAfterMove, collisionContext)
-    if collision
-    {
+    if collision {
         body = rigidBody
         redirected := GetWallSlidingDirection(playerBbAfterMove, collidedBox, originalBodyDirection)
 
@@ -697,8 +684,7 @@ move_and_slide :: proc(rigidBody: RigidBody, collisionContext: CollisionContext)
     return body
 }
 
-ray_x_scene :: proc (ray: rl.Ray, collisionContext: CollisionContext) -> rl.RayCollision
-{
+ray_x_scene :: proc (ray: rl.Ray, collisionContext: CollisionContext) -> rl.RayCollision {
     minHitDistance := math.inf_f32(1)
     closestHit: rl.RayCollision
 
@@ -725,8 +711,7 @@ ray_x_scene :: proc (ray: rl.Ray, collisionContext: CollisionContext) -> rl.RayC
     return closestHit    
 }
 
-handle_interaction :: proc(state: GameState, itemInteraction: ItemInteraction, itemManager: ^ItemManager) -> GameState
-{
+handle_interaction :: proc(state: GameState, itemInteraction: ItemInteraction, itemManager: ^ItemManager) -> GameState {
     stateAfterInteraction := state
 
     switch interaction in itemInteraction {
@@ -769,8 +754,7 @@ get_possible_item_interaction :: proc(
     state: GameState,
     itemManager: ^ItemManager,
     collisionContext: CollisionContext,
-    staticData: ^StaticData) -> ItemInteraction
-{
+    staticData: ^StaticData) -> ItemInteraction {
     viewRay := rl.Ray{get_player_head_position(state.player), get_camera_view_vector(state)}
 
     if can_pickup_item(itemManager) {
@@ -863,8 +847,7 @@ get_possible_item_interaction :: proc(
     //return NoInteraction{}
 }
 
-create_collision_context :: proc(state: GameState, staticData: ^StaticData, itemManager: ^ItemManager) -> CollisionContext
-{
+create_collision_context :: proc(state: GameState, staticData: ^StaticData, itemManager: ^ItemManager) -> CollisionContext {
     placedItems := get_placed_items(itemManager)
     placedItemColliders := make([]rl.BoundingBox, len(placedItems))
     for item, i in placedItems {
@@ -887,8 +870,7 @@ create_collision_context :: proc(state: GameState, staticData: ^StaticData, item
         ItemIdInvalid}
 }
 
-FixedUpdate :: proc(previousState: GameState, actions: InputActions, staticData: ^StaticData, itemManager: ^ItemManager) -> GameState
-{
+FixedUpdate :: proc(previousState: GameState, actions: InputActions, staticData: ^StaticData, itemManager: ^ItemManager) -> GameState {
     currentState := previousState
 
     collisionContext := create_collision_context(currentState, staticData, itemManager)
@@ -952,8 +934,7 @@ FixedUpdate :: proc(previousState: GameState, actions: InputActions, staticData:
     // itemManager.items[0].rigidBody = update_rigid_body(itemManager.items[0].rigidBody, collisionContext)
     // fmt.println(itemManager.items[0].rigidBody.position)
     // fmt.println(itemManager.items[0].rigidBody.velocity)
-    for i in 0..<len(itemManager.items)
-    {
+    for i in 0..<len(itemManager.items) {
         itemActive := itemManager.items[i].id != ItemIdInvalid
         itemActive or_continue
 
@@ -1000,8 +981,7 @@ FixedUpdate :: proc(previousState: GameState, actions: InputActions, staticData:
     interactOnCooldown := currentState.interactAnimationTimer > rl.EPSILON
     if interactOnCooldown {
         currentState.interactAnimationTimer -= DT
-    }
-    else {
+    } else {
         currentState.availableInteraction = availableInteraction
 
         if actions.interact && type_of(availableInteraction) != NoInteraction {
@@ -1018,8 +998,7 @@ FixedUpdate :: proc(previousState: GameState, actions: InputActions, staticData:
 }
 
 ITEM_ROTATION_SPEED :: 25.0
-draw_held_item_to_texture :: proc(destinationTexture: ^rl.RenderTexture2D, itemModel: rl.Model, t: f64)
-{
+draw_held_item_to_texture :: proc(destinationTexture: ^rl.RenderTexture2D, itemModel: rl.Model, t: f64) {
     itemPos := rl.Vector3{3, 0, 0}
     txCamera := rl.Camera3D { 
         rl.Vector3(0),
@@ -1040,244 +1019,472 @@ draw_held_item_to_texture :: proc(destinationTexture: ^rl.RenderTexture2D, itemM
     rl.EndTextureMode()
 }
 
-main :: proc() {
+GameMemory :: struct {
+    run: bool,
+    lightingShader: rl.Shader,
+    uniformLocations: UniformLocations,
+    staticData: StaticData,
+    material: rl.Material,
+    itemManager: ItemManager,
+    handTex: rl.Texture2D,
+    heldItemTexture: rl.RenderTexture2D,
+    fixedUpdateRanLastFrame: bool,
+    actions: InputActions,
+    accumulator: f32,
+    previousState: GameState,
+    currentState: GameState,
+}
+
+gMem: ^GameMemory
+
+game_parent_window_size_changed :: proc(widht, height: int) {}
+
+@(export)
+game_init_window :: proc() {
     rl.SetConfigFlags({rl.ConfigFlag.MSAA_4X_HINT, rl.ConfigFlag.WINDOW_RESIZABLE})
     rl.InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Elbow Grease")
 
     rl.DisableCursor()
     rl.SetTargetFPS(FPS)
-    
+}
+
+@(export)
+game_init :: proc() {
     lightingShader := rl.LoadShader("res/shaders/basic_lighting.vs", "res/shaders/basic_lighting.fs")
-    rednessLocation := rl.GetShaderLocation(lightingShader, strings.clone_to_cstring("textureIndex"))
-    tilingLocation := rl.GetShaderLocation(lightingShader, strings.clone_to_cstring("meshDimensions"))
-    variantLocation := rl.GetShaderLocation(lightingShader, strings.clone_to_cstring("variant"))
-    texIndex: i32 = 0
-    //rl.SetShaderValue(lightingShader, rednessLocation, &redness, rl.ShaderUniformDataType.FLOAT)
-
-
-    // material2: rl.Material = { 
-    //     shader = lightingShader,
-    //     maps = make_multi_pointer([^]rl.MaterialMap, len(rl.MaterialMapIndex)) 
-    // }
-    // rl.SetMaterialTexture(&material2, rl.MaterialMapIndex.ALBEDO, texture)
-
-    mesh := rl.GenMeshCube(1.0, 1.0, 1.0)
-    // model := rl.LoadModelFromMesh(mesh)
-    // model.materials[0].shader = lightingShader
-    // model.materials[0].maps[rl.MaterialMapIndex.ALBEDO].texture = texture
-
-    meshPos := PLAYER_INITIAL_POSITION + {6, 0, 6}
-    meshTransform := rl.MatrixTranslate(meshPos.x, meshPos.y, meshPos.z)
-
-    meshPos2 := PLAYER_INITIAL_POSITION + {8, 0, 6}
-    meshTransform2 := rl.MatrixTranslate(meshPos2.x, meshPos2.y, meshPos2.z)
+    uniformLocations := UniformLocations {
+        rl.GetShaderLocation(lightingShader, strings.clone_to_cstring("textureIndex")),
+        rl.GetShaderLocation(lightingShader, strings.clone_to_cstring("meshDimensions")),
+        rl.GetShaderLocation(lightingShader, strings.clone_to_cstring("variant")),
+    }
 
     staticData := setup_static_data()
-    initialState := get_initial_game_state(&staticData)
 
-    material: rl.Material = { 
+    material := rl.Material { 
         shader = lightingShader,
-        maps = make_multi_pointer([^]rl.MaterialMap, len(rl.MaterialMapIndex)) 
+        maps = make_multi_pointer([^]rl.MaterialMap, len(rl.MaterialMapIndex)),
     }
     rl.SetMaterialTexture(&material, rl.MaterialMapIndex.ALBEDO, staticData.material_texture_atlas)
 
     itemManager := create_item_manager()
     load_items_from_file(&itemManager, "res/items.json")
-    // create_item(&itemManager, PLAYER_INITIAL_POSITION + rl.Vector3{2.0, 0.0, 0}, { .Lamp, .Huge })
-    // create_item(&itemManager, PLAYER_INITIAL_POSITION + rl.Vector3{2.0, 0.0, 2}, { .Table, .Huge })
-    // create_item(&itemManager, PLAYER_INITIAL_POSITION + rl.Vector3{2.0, 0.0, 4}, { .Plant, .Huge })
-    // create_item(&itemManager, PLAYER_INITIAL_POSITION + rl.Vector3{4.0, 0.0, 4}, { .Chair, .Huge })
-    //
-
-    cameraMode := rl.CameraMode.FIRST_PERSON
-    camera := rl.Camera3D { 
-        rl.Vector3(0),
-        rl.Vector3(0),
-        rl.Vector3 {0.0, 1.0, 0.0},
-        45.0,
-        rl.CameraProjection.PERSPECTIVE }
-
-    setup_camera(&camera, initialState)
-
-    //fmt.println(camera.position)
-    //fmt.println(camera.target)
 
     handImage := rl.LoadImage("res/hands_sheet.png")
-    tiles := handImage.width / SHEET_TILE_SIZE
 
     imageAspectRatio := f32(handImage.width) / f32(handImage.height)
     rl.ImageResize(&handImage, i32(SHEET_RESIZED_TILE_SIZE * imageAspectRatio), i32(SHEET_RESIZED_TILE_SIZE))
-    valid := rl.IsImageValid(handImage)
 
     handTex := rl.LoadTextureFromImage(handImage)
     heldItemTexture := rl.LoadRenderTexture(HELD_ITEM_SIZE, HELD_ITEM_SIZE)
+    
+    initialState := get_initial_game_state(&staticData)
 
-    fixedUpdateRanLastFrame := false
-    actions := InputActions{}
+    gMem = new(GameMemory)
+    gMem^ = GameMemory {
+        run = true,
+        lightingShader = lightingShader,
+        uniformLocations = uniformLocations,
+        staticData = staticData,
+        material = material,
+        itemManager = itemManager,
+        handTex = handTex,
+        heldItemTexture = heldItemTexture,
+        fixedUpdateRanLastFrame = false,
+        actions = InputActions {},
+        accumulator = 0.0,
+        previousState = initialState,
+        currentState = initialState,
+    }
+}
 
-    accumulator :f32= 0.0
-    previousState := initialState
-    currentState := initialState
+@(export)
+game_update :: proc() {
+    update()
 
-    gameloop: for !rl.WindowShouldClose() {
-        frameTime := rl.GetFrameTime()
-
-        if currentState.win {
-            rl.BeginDrawing()
-                rl.DrawText(strings.clone_to_cstring("You Win!"), WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2, 60, rl.WHITE)
-                rl.DrawText(strings.clone_to_cstring("press \"ESC\" to close the game"), WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2 + 60, 20, rl.WHITE)
-            rl.EndDrawing()
-
-            continue;
-        }
-
-        actions = poll_actions_raw() if fixedUpdateRanLastFrame else poll_actions_inherit_queuable(actions)
-        fixedUpdateRanLastFrame = false
-
-        accumulator += frameTime
-        origAccumulator := accumulator
-        for accumulator >= DT {
-            previousState = currentState
-            currentState = FixedUpdate(previousState, actions, &staticData, &itemManager)
-
-            accumulator -= DT
-            fixedUpdateRanLastFrame = true
-        }
-
-        alpha := accumulator / DT
-        renderState := interpolate_states(&previousState, &currentState, alpha)
-
-        /// From this point on, renderState should be used instead of current/prev state
-        setup_camera(&camera, renderState)
-        //fmt.println(renderState.cameraPitch)
-        // fmt.println(camera.target)
-
-        rl.BeginDrawing()
-            rl.ClearBackground(rl.RAYWHITE)
-            rl.BeginMode3D(camera)
-
-                tilingDefault := rl.Vector3(1.0)
-                rl.SetShaderValue(lightingShader, tilingLocation, &tilingDefault, rl.ShaderUniformDataType.VEC3)
-                // texIndex = 1
-                // rl.SetShaderValue(lightingShader, rednessLocation, &texIndex, rl.ShaderUniformDataType.INT)
-                // rl.DrawMesh(mesh, material, meshTransform)
-                // 
-                // texIndex = 0
-                // rl.SetShaderValue(lightingShader, rednessLocation, &texIndex, rl.ShaderUniformDataType.INT)
-                // rl.DrawMesh(mesh, material, meshTransform2)
-
-                //rl.DrawMesh(mesh, material2, meshTransform2)
-
-                // Draw the walls
-                //rl.DrawModel(staticData.axisAlignedScene, rl.Vector3(0), 1.0, rl.WHITE)
-
-                for mesh, inx in staticData.axisAlignedScene.meshes[:staticData.axisAlignedScene.meshCount] {
-                    meshBb := staticData.sceneAxisAlignedColliders[inx]
-                    tiling := (meshBb.max - meshBb.min)
-                    rl.SetShaderValue(lightingShader, tilingLocation, &tiling, rl.ShaderUniformDataType.VEC3)
-                    texIndex := staticData.meshTextureIndices[inx]
-                    rl.SetShaderValue(lightingShader, rednessLocation, &texIndex, rl.ShaderUniformDataType.INT)
-
-
-                    rl.DrawMesh(mesh, material, staticData.axisAlignedScene.transform)
-                    //rl.DrawBoundingBox(meshBb, rl.WHITE)
-                }
-                //rl.DrawModel(staticData.angledScene, rl.Vector3(0), 1.0, rl.WHITE)
-
-                texIndex = 1
-                rl.SetShaderValue(lightingShader, rednessLocation, &texIndex, rl.ShaderUniformDataType.INT)
-                // Draw items
-                for item in get_placed_items(&itemManager) {
-                    itemModel := itemManager.itemModels[item.descriptor.type]
-
-                    variant := item.descriptor.variant
-                    rl.SetShaderValue(lightingShader, variantLocation, &variant, rl.ShaderUniformDataType.INT)
-
-                    pos := item.rigidBody.position
-                    transform := rl.MatrixTranslate(pos.x, pos.y, pos.z)
-                    for meshh in itemModel.meshes[:itemModel.meshCount] {
-                        rl.DrawMesh(meshh, material, transform)
-                    }
-                    // //fmt.println(item.rigidBody.position)
-                    // rl.DrawModel(itemManager.itemModels[item.descriptor.type], item.rigidBody.position, 1.0, rl.WHITE)
-                    //rl.DrawBoundingBox(itemManager.itemColliders[item.id], rl.BLUE)
-                }
-
-                // Draw shopping cart
-                rl.DrawModel(staticData.shoppingCart.model, renderState.shoppingCart.rigidBody.position, 1.0, rl.BROWN)
-
-                // Draw ghost of placeable item
-                if placeOnGround, ok := renderState.availableInteraction.(PlaceableOnGround); ok {
-                    activeItem := get_active_item(&itemManager)
-                    if item, itemOk := activeItem.?; itemOk {
-                        itemBb := position_bounding_box(itemManager.items[item.id].rigidBody.boundingBox, renderState.heldItemGhostPosition)
-                        color := rl.WHITE if placeOnGround.spotValid else rl.RED
-                        rl.DrawBoundingBox(itemBb, color)
-                    }
-                }
-            rl.EndMode3D()
-
-            itemInHand := itemManager.activeItem != ItemIdInvalid
-            if itemInHand {
-                item := itemManager.items[itemManager.activeItem]
-                draw_held_item_to_texture(&heldItemTexture, itemManager.itemModels[item.descriptor.type], rl.GetTime())
-            }
-
-            rl.DrawFPS(20, 20)
-
-            // itemInHandMessage := fmt.tprintf("position: %x", renderState.player.rigidBody.position)
-            // rl.DrawText(strings.clone_to_cstring(itemInHandMessage), 50, 70, 20, rl.BLACK)
-
-            handState: HandState = HandHoldingItem{1, heldItemTexture.texture} if itemInHand else EmptyHand{0}
-            draw_hand(handTex, renderState.interactAnimationTimer, handState)
-
-            // Draw interaction help message
-            message: string
-            switch interaction in renderState.availableInteraction {
-            case InteractableItem:
-                message = "Press \"E\" to pickup the item"
-            case PlaceableInCart:
-                switch interaction.status {
-                case .Acceptable:
-                    message = "Press \"E\" to deposit item in cart"
-                case .NotOnList:
-                    message = "Item not on shopping list"
-                case .AlreadyInCart:
-                    message = "Item already in cart"
-                }
-            case PlaceableOnGround:
-                message = "Press \"E\" to place the item on the ground" if interaction.spotValid else "The item cannot be placed here"
-            case Throw:
-                message = "Press \"E\" to throw the item"
-            case NoInteraction:
-            }
-
-            if len(message) != 0 {
-                messageCstring := strings.clone_to_cstring(message)
-                textWidth := rl.MeasureText(messageCstring, 32)
-
-                rl.DrawText(messageCstring, WINDOW_WIDTH / 2 - textWidth / 2, WINDOW_HEIGHT - 100, 32, rl.BLACK)
-            }
-
-            rl.DrawText(strings.clone_to_cstring("Shopping list:"), WINDOW_WIDTH - 175, 10, 25, rl.BLACK)
-
-            for shoppingItem, i in staticData.shoppingCart.shoppingList {
-                itemMsg := fmt.tprintf("%s %s", shoppingItem.variant, shoppingItem.type)
-                x := i32(WINDOW_WIDTH - 175)
-                y := i32(50 + i*30)
-                rl.DrawText(strings.clone_to_cstring(itemMsg), x, y, 20, rl.BLACK)
-
-                if can_place_in_shopping_cart(&staticData.shoppingCart, renderState.shoppingCart, shoppingItem) == CartItemStatus.AlreadyInCart {
-                    rl.DrawLine(i32(x+10), i32(y+10), i32(x+10+100), i32(y+10), rl.RED)
-                }
-            }
-
-            //debugMsg := fmt.tprintf("Keys: %i / %i", keysPickedUp, KEYS_NEEDED)
-            //rl.DrawText(strings.clone_to_cstring(debugMsg), 10, 10, 20, rl.BLACK)
-        rl.EndDrawing()
+    if rl.IsKeyPressed(.ESCAPE) {
+        gMem.run = false
     }
 
-    // rl.UnloadModel(cube)
-    // rl.UnloadShader(lightingShader)
+    draw()
+}
+
+@(export)
+game_should_run :: proc() -> bool {
+    return gMem.run
+}
+
+@(export)
+game_shutdown :: proc() {
+    free(gMem)
+}
+
+@(export)
+game_shutdown_window :: proc() {
     rl.CloseWindow()
 }
+
+UniformLocations :: struct {
+    textureIndex: i32,
+    meshDimensions: i32,
+    variant: i32,
+}
+
+update :: proc() {
+    if gMem.currentState.win {
+        return
+    }
+
+    gMem.actions = poll_actions_raw() if gMem.fixedUpdateRanLastFrame else poll_actions_inherit_queuable(gMem.actions)
+    gMem.fixedUpdateRanLastFrame = false
+
+    gMem.accumulator += rl.GetFrameTime()
+    for gMem.accumulator >= DT {
+        gMem.previousState = gMem.currentState
+        gMem.currentState = FixedUpdate(gMem.previousState, gMem.actions, &gMem.staticData, &gMem.itemManager)
+
+        gMem.accumulator -= DT
+        gMem.fixedUpdateRanLastFrame = true
+    }
+}
+
+draw :: proc() {
+    if gMem.currentState.win {
+        rl.BeginDrawing()
+            rl.DrawText(strings.clone_to_cstring("You Win!"), WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2, 60, rl.WHITE)
+            rl.DrawText(strings.clone_to_cstring("press \"ESC\" to close the game"), WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2 + 60, 20, rl.WHITE)
+        rl.EndDrawing()
+
+        return
+    }
+
+    alpha := gMem.accumulator / DT
+    renderState := interpolate_states(&gMem.previousState, &gMem.currentState, alpha)
+
+    /// From this point on, renderState should be used instead of current/prev state
+    camera := setup_camera(renderState)
+
+    rl.BeginDrawing()
+        rl.ClearBackground(rl.RAYWHITE)
+        rl.BeginMode3D(camera)
+
+            tilingDefault := rl.Vector3(1.0)
+            rl.SetShaderValue(gMem.lightingShader, gMem.uniformLocations.meshDimensions, &tilingDefault, rl.ShaderUniformDataType.VEC3)
+
+            // Draw the walls
+            for mesh, inx in gMem.staticData.axisAlignedScene.meshes[:gMem.staticData.axisAlignedScene.meshCount] {
+                meshBb := gMem.staticData.sceneAxisAlignedColliders[inx]
+                tiling := (meshBb.max - meshBb.min)
+                rl.SetShaderValue(gMem.lightingShader, gMem.uniformLocations.meshDimensions, &tiling, rl.ShaderUniformDataType.VEC3)
+                texIndex := f32(gMem.staticData.meshTextureIndices[inx])
+                rl.SetShaderValue(gMem.lightingShader, gMem.uniformLocations.textureIndex, &texIndex, rl.ShaderUniformDataType.FLOAT)
+
+                rl.DrawMesh(mesh, gMem.material, gMem.staticData.axisAlignedScene.transform)
+                //rl.DrawBoundingBox(meshBb, rl.WHITE)
+            }
+
+            // Draw items
+            itemsTextureIndex := f32(1)
+            rl.SetShaderValue(gMem.lightingShader, gMem.uniformLocations.textureIndex, &itemsTextureIndex, rl.ShaderUniformDataType.FLOAT)
+
+            for item in get_placed_items(&gMem.itemManager) {
+                itemModel := gMem.itemManager.itemModels[item.descriptor.type]
+
+                variant := f32(item.descriptor.variant)
+                rl.SetShaderValue(gMem.lightingShader, gMem.uniformLocations.variant, &variant, rl.ShaderUniformDataType.FLOAT)
+
+                pos := item.rigidBody.position
+                transform := rl.MatrixTranslate(pos.x, pos.y, pos.z)
+                for meshh in itemModel.meshes[:itemModel.meshCount] {
+                    rl.DrawMesh(meshh, gMem.material, transform)
+                }
+                // //fmt.println(item.rigidBody.position)
+                // rl.DrawModel(itemManager.itemModels[item.descriptor.type], item.rigidBody.position, 1.0, rl.WHITE)
+                //rl.DrawBoundingBox(itemManager.itemColliders[item.id], rl.BLUE)
+            }
+
+            // Draw shopping cart
+            rl.DrawModel(gMem.staticData.shoppingCart.model, renderState.shoppingCart.rigidBody.position, 1.0, rl.BROWN)
+
+            // Draw ghost of placeable item
+            if placeOnGround, ok := renderState.availableInteraction.(PlaceableOnGround); ok {
+                activeItem := get_active_item(&gMem.itemManager)
+                if item, itemOk := activeItem.?; itemOk {
+                    itemBb := position_bounding_box(gMem.itemManager.items[item.id].rigidBody.boundingBox, renderState.heldItemGhostPosition)
+                    color := rl.WHITE if placeOnGround.spotValid else rl.RED
+                    rl.DrawBoundingBox(itemBb, color)
+                }
+            }
+        rl.EndMode3D()
+
+        itemInHand := gMem.itemManager.activeItem != ItemIdInvalid
+        if itemInHand {
+            item := gMem.itemManager.items[gMem.itemManager.activeItem]
+            draw_held_item_to_texture(&gMem.heldItemTexture, gMem.itemManager.itemModels[item.descriptor.type], rl.GetTime())
+        }
+
+        rl.DrawFPS(20, 20)
+
+        // itemInHandMessage := fmt.tprintf("position: %x", renderState.player.rigidBody.position)
+        // rl.DrawText(strings.clone_to_cstring(itemInHandMessage), 50, 70, 20, rl.BLACK)
+
+        handState: HandState = HandHoldingItem{1, gMem.heldItemTexture.texture} if itemInHand else EmptyHand{0}
+        draw_hand(gMem.handTex, renderState.interactAnimationTimer, handState)
+
+        // Draw interaction help message
+        message: string
+        switch interaction in renderState.availableInteraction {
+        case InteractableItem:
+            message = "Press \"E\" to pickup the item"
+        case PlaceableInCart:
+            switch interaction.status {
+            case .Acceptable:
+                message = "Press \"E\" to deposit item in cart"
+            case .NotOnList:
+                message = "Item not on shopping list"
+            case .AlreadyInCart:
+                message = "Item already in cart"
+            }
+        case PlaceableOnGround:
+            message = "Press \"E\" to place the item on the ground" if interaction.spotValid else "The item cannot be placed here"
+        case Throw:
+            message = "Press \"E\" to throw the item"
+        case NoInteraction:
+        }
+
+        if len(message) != 0 {
+            messageCstring := strings.clone_to_cstring(message)
+            textWidth := rl.MeasureText(messageCstring, 32)
+
+            rl.DrawText(messageCstring, WINDOW_WIDTH / 2 - textWidth / 2, WINDOW_HEIGHT - 100, 32, rl.BLACK)
+        }
+
+        rl.DrawText(strings.clone_to_cstring("Shopping list:"), WINDOW_WIDTH - 175, 10, 25, rl.BLACK)
+
+        for shoppingItem, i in gMem.staticData.shoppingCart.shoppingList {
+            itemMsg := fmt.tprintf("%s %s", shoppingItem.variant, shoppingItem.type)
+            x := i32(WINDOW_WIDTH - 175)
+            y := i32(50 + i*30)
+            rl.DrawText(strings.clone_to_cstring(itemMsg), x, y, 20, rl.BLACK)
+
+            if can_place_in_shopping_cart(&gMem.staticData.shoppingCart, renderState.shoppingCart, shoppingItem) == CartItemStatus.AlreadyInCart {
+                rl.DrawLine(i32(x+10), i32(y+10), i32(x+10+100), i32(y+10), rl.RED)
+            }
+        }
+
+        //debugMsg := fmt.tprintf("Keys: %i / %i", keysPickedUp, KEYS_NEEDED)
+        //rl.DrawText(strings.clone_to_cstring(debugMsg), 10, 10, 20, rl.BLACK)
+    rl.EndDrawing()
+}
+
+// main :: proc() {
+//     rl.SetConfigFlags({rl.ConfigFlag.MSAA_4X_HINT, rl.ConfigFlag.WINDOW_RESIZABLE})
+//     rl.InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Elbow Grease")
+//
+//     rl.DisableCursor()
+//     rl.SetTargetFPS(FPS)
+//     
+//     // gamestate
+//     lightingShader := rl.LoadShader("res/shaders/basic_lighting.vs", "res/shaders/basic_lighting.fs")
+//     // gamestate
+//     uniformLocations := UniformLocations {
+//         rl.GetShaderLocation(lightingShader, strings.clone_to_cstring("textureIndex")),
+//         rl.GetShaderLocation(lightingShader, strings.clone_to_cstring("meshDimensions")),
+//         rl.GetShaderLocation(lightingShader, strings.clone_to_cstring("variant"))
+//     }
+//
+//     // gamestate
+//     staticData := setup_static_data()
+//     initialState := get_initial_game_state(&staticData)
+//
+//     // gamestate
+//     material: rl.Material = { 
+//         shader = lightingShader,
+//         maps = make_multi_pointer([^]rl.MaterialMap, len(rl.MaterialMapIndex)) 
+//     }
+//     rl.SetMaterialTexture(&material, rl.MaterialMapIndex.ALBEDO, staticData.material_texture_atlas)
+//
+//     // gamestate
+//     itemManager := create_item_manager()
+//     load_items_from_file(&itemManager, "res/items.json")
+//
+//     // camera := rl.Camera3D { 
+//     //     rl.Vector3(0),
+//     //     rl.Vector3(0),
+//     //     rl.Vector3 {0.0, 1.0, 0.0},
+//     //     45.0,
+//     //     rl.CameraProjection.PERSPECTIVE }
+//     // setup_camera(&camera, initialState)
+//
+//     handImage := rl.LoadImage("res/hands_sheet.png")
+//
+//     imageAspectRatio := f32(handImage.width) / f32(handImage.height)
+//     rl.ImageResize(&handImage, i32(SHEET_RESIZED_TILE_SIZE * imageAspectRatio), i32(SHEET_RESIZED_TILE_SIZE))
+//
+//
+//     // gamestate
+//     handTex := rl.LoadTextureFromImage(handImage)
+//     // gamestate
+//     heldItemTexture := rl.LoadRenderTexture(HELD_ITEM_SIZE, HELD_ITEM_SIZE)
+//
+//     // gamestate
+//     fixedUpdateRanLastFrame := false
+//     // gamestate
+//     actions := InputActions{}
+//
+//     // gamestate
+//     accumulator :f32= 0.0
+//     // gamestate
+//     previousState := initialState
+//     // camestate
+//     currentState := initialState
+//
+//     gameloop: for !rl.WindowShouldClose() {
+//         frameTime := rl.GetFrameTime()
+//
+//         if currentState.win {
+//             rl.BeginDrawing()
+//                 rl.DrawText(strings.clone_to_cstring("You Win!"), WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2, 60, rl.WHITE)
+//                 rl.DrawText(strings.clone_to_cstring("press \"ESC\" to close the game"), WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2 + 60, 20, rl.WHITE)
+//             rl.EndDrawing()
+//
+//             continue;
+//         }
+//
+//         actions = poll_actions_raw() if fixedUpdateRanLastFrame else poll_actions_inherit_queuable(actions)
+//         fixedUpdateRanLastFrame = false
+//
+//         accumulator += frameTime
+//         origAccumulator := accumulator
+//         for accumulator >= DT {
+//             previousState = currentState
+//             currentState = FixedUpdate(previousState, actions, &staticData, &itemManager)
+//
+//             accumulator -= DT
+//             fixedUpdateRanLastFrame = true
+//         }
+//
+//         alpha := accumulator / DT
+//         renderState := interpolate_states(&previousState, &currentState, alpha)
+//
+//         /// From this point on, renderState should be used instead of current/prev state
+//         camera := setup_camera(renderState)
+//         //fmt.println(renderState.cameraPitch)
+//         // fmt.println(camera.target)
+//
+//         rl.BeginDrawing()
+//             rl.ClearBackground(rl.RAYWHITE)
+//             rl.BeginMode3D(camera)
+//
+//                 tilingDefault := rl.Vector3(1.0)
+//                 rl.SetShaderValue(lightingShader, uniformLocations.meshDimensions, &tilingDefault, rl.ShaderUniformDataType.VEC3)
+//
+//                 // Draw the walls
+//                 for mesh, inx in staticData.axisAlignedScene.meshes[:staticData.axisAlignedScene.meshCount] {
+//                     meshBb := staticData.sceneAxisAlignedColliders[inx]
+//                     tiling := (meshBb.max - meshBb.min)
+//                     rl.SetShaderValue(lightingShader, uniformLocations.meshDimensions, &tiling, rl.ShaderUniformDataType.VEC3)
+//                     texIndex := staticData.meshTextureIndices[inx]
+//                     rl.SetShaderValue(lightingShader, uniformLocations.textureIndex, &texIndex, rl.ShaderUniformDataType.INT)
+//
+//
+//                     rl.DrawMesh(mesh, material, staticData.axisAlignedScene.transform)
+//                     //rl.DrawBoundingBox(meshBb, rl.WHITE)
+//                 }
+//
+//                 // Draw items
+//                 itemsTextureIndex := 1
+//                 rl.SetShaderValue(lightingShader, uniformLocations.textureIndex, &itemsTextureIndex, rl.ShaderUniformDataType.INT)
+//
+//                 for item in get_placed_items(&itemManager) {
+//                     itemModel := itemManager.itemModels[item.descriptor.type]
+//
+//                     variant := item.descriptor.variant
+//                     rl.SetShaderValue(lightingShader, uniformLocations.variant, &variant, rl.ShaderUniformDataType.INT)
+//
+//                     pos := item.rigidBody.position
+//                     transform := rl.MatrixTranslate(pos.x, pos.y, pos.z)
+//                     for meshh in itemModel.meshes[:itemModel.meshCount] {
+//                         rl.DrawMesh(meshh, material, transform)
+//                     }
+//                     // //fmt.println(item.rigidBody.position)
+//                     // rl.DrawModel(itemManager.itemModels[item.descriptor.type], item.rigidBody.position, 1.0, rl.WHITE)
+//                     //rl.DrawBoundingBox(itemManager.itemColliders[item.id], rl.BLUE)
+//                 }
+//
+//                 // Draw shopping cart
+//                 rl.DrawModel(staticData.shoppingCart.model, renderState.shoppingCart.rigidBody.position, 1.0, rl.BROWN)
+//
+//                 // Draw ghost of placeable item
+//                 if placeOnGround, ok := renderState.availableInteraction.(PlaceableOnGround); ok {
+//                     activeItem := get_active_item(&itemManager)
+//                     if item, itemOk := activeItem.?; itemOk {
+//                         itemBb := position_bounding_box(itemManager.items[item.id].rigidBody.boundingBox, renderState.heldItemGhostPosition)
+//                         color := rl.WHITE if placeOnGround.spotValid else rl.RED
+//                         rl.DrawBoundingBox(itemBb, color)
+//                     }
+//                 }
+//             rl.EndMode3D()
+//
+//             itemInHand := itemManager.activeItem != ItemIdInvalid
+//             if itemInHand {
+//                 item := itemManager.items[itemManager.activeItem]
+//                 draw_held_item_to_texture(&heldItemTexture, itemManager.itemModels[item.descriptor.type], rl.GetTime())
+//             }
+//
+//             rl.DrawFPS(20, 20)
+//
+//             // itemInHandMessage := fmt.tprintf("position: %x", renderState.player.rigidBody.position)
+//             // rl.DrawText(strings.clone_to_cstring(itemInHandMessage), 50, 70, 20, rl.BLACK)
+//
+//             handState: HandState = HandHoldingItem{1, heldItemTexture.texture} if itemInHand else EmptyHand{0}
+//             draw_hand(handTex, renderState.interactAnimationTimer, handState)
+//
+//             // Draw interaction help message
+//             message: string
+//             switch interaction in renderState.availableInteraction {
+//             case InteractableItem:
+//                 message = "Press \"E\" to pickup the item"
+//             case PlaceableInCart:
+//                 switch interaction.status {
+//                 case .Acceptable:
+//                     message = "Press \"E\" to deposit item in cart"
+//                 case .NotOnList:
+//                     message = "Item not on shopping list"
+//                 case .AlreadyInCart:
+//                     message = "Item already in cart"
+//                 }
+//             case PlaceableOnGround:
+//                 message = "Press \"E\" to place the item on the ground" if interaction.spotValid else "The item cannot be placed here"
+//             case Throw:
+//                 message = "Press \"E\" to throw the item"
+//             case NoInteraction:
+//             }
+//
+//             if len(message) != 0 {
+//                 messageCstring := strings.clone_to_cstring(message)
+//                 textWidth := rl.MeasureText(messageCstring, 32)
+//
+//                 rl.DrawText(messageCstring, WINDOW_WIDTH / 2 - textWidth / 2, WINDOW_HEIGHT - 100, 32, rl.BLACK)
+//             }
+//
+//             rl.DrawText(strings.clone_to_cstring("Shopping list:"), WINDOW_WIDTH - 175, 10, 25, rl.BLACK)
+//
+//             for shoppingItem, i in staticData.shoppingCart.shoppingList {
+//                 itemMsg := fmt.tprintf("%s %s", shoppingItem.variant, shoppingItem.type)
+//                 x := i32(WINDOW_WIDTH - 175)
+//                 y := i32(50 + i*30)
+//                 rl.DrawText(strings.clone_to_cstring(itemMsg), x, y, 20, rl.BLACK)
+//
+//                 if can_place_in_shopping_cart(&staticData.shoppingCart, renderState.shoppingCart, shoppingItem) == CartItemStatus.AlreadyInCart {
+//                     rl.DrawLine(i32(x+10), i32(y+10), i32(x+10+100), i32(y+10), rl.RED)
+//                 }
+//             }
+//
+//             //debugMsg := fmt.tprintf("Keys: %i / %i", keysPickedUp, KEYS_NEEDED)
+//             //rl.DrawText(strings.clone_to_cstring(debugMsg), 10, 10, 20, rl.BLACK)
+//         rl.EndDrawing()
+//     }
+//
+//     // rl.UnloadModel(cube)
+//     // rl.UnloadShader(lightingShader)
+//     rl.CloseWindow()
+// }

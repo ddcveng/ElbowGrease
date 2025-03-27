@@ -1,9 +1,6 @@
 package jamgame
 
-//import "core:container/queue"
 import rl "vendor:raylib"
-import "core:math/linalg"
-import "core:fmt"
 
 MoveDirection :: enum {
     Forward, 
@@ -24,8 +21,7 @@ InputActions :: struct {
 
 poll_actions :: proc{poll_actions_raw, poll_actions_inherit_queuable}
 
-poll_actions_inherit_queuable :: proc(previousActions: InputActions) -> InputActions
-{
+poll_actions_inherit_queuable :: proc(previousActions: InputActions) -> InputActions {
     actions := poll_actions_raw()
     actions.jump |= previousActions.jump
     actions.interact |= previousActions.interact
@@ -37,8 +33,7 @@ firstMouseDelta := rl.Vector2(0)
 mouseMoved := false
 firstMouse := true
 
-poll_actions_raw :: proc() -> InputActions
-{
+poll_actions_raw :: proc() -> InputActions {
     actions := InputActions{}
 
     // Movement
