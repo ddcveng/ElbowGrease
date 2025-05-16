@@ -31,6 +31,8 @@ JUMP_FORCE :: 40.0
 
 VELOCITY_DECAY_MULTIPLIER :: 0.9
 
+RESOURCE_PATH :: "res/"
+
 Point3 :: [3]f32
 Triangle :: [3]Point3
 
@@ -118,7 +120,7 @@ setup_static_data :: proc() -> StaticData {
     playerModel := rl.LoadModelFromMesh(rl.GenMeshCube(1.0, PLAYER_HEIGHT, 1.0))
     playerBoundingBox := rl.GetModelBoundingBox(playerModel)
 
-    axisAlignedScene := rl.LoadModel("res/scenes/ikea2.glb")
+    axisAlignedScene := rl.LoadModel(RESOURCE_PATH + "scenes/ikea2.glb")
     //axisAlignedScene.materials[1].shader = lightingShader
     // I can overwrite the shared on a per-mesh basis even though its just one model!
     // the color from the original material is lost though... maybe painting vertex colors would work?
@@ -164,8 +166,8 @@ setup_static_data :: proc() -> StaticData {
         ItemDescriptor{.Lamp, .Regular},
     } }
 
-    material_textures := rl.LoadTexture("res/material_textures.png")
-    materialIndices := load_texture_indices("res/level_material_indices.json")
+    material_textures := rl.LoadTexture(RESOURCE_PATH + "material_textures.png")
+    materialIndices := load_texture_indices(RESOURCE_PATH + "level_material_indices.json")
 
     assert(len(materialIndices) == int(axisAlignedScene.meshCount))
 
@@ -1037,25 +1039,32 @@ GameMemory :: struct {
 
 gMem: ^GameMemory
 
+
+
 game_parent_window_size_changed :: proc(widht, height: int) {}
 
 @(export)
 game_init_window :: proc() {
     rl.SetConfigFlags({rl.ConfigFlag.MSAA_4X_HINT, rl.ConfigFlag.WINDOW_RESIZABLE})
     rl.InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Elbow Grease")
+    rl.SetExitKey(nil)
 
     rl.DisableCursor()
     rl.SetTargetFPS(FPS)
+    fmt.println("init window")
 }
 
 @(export)
 game_init :: proc() {
-    lightingShader := rl.LoadShader("res/shaders/basic_lighting.vs", "res/shaders/basic_lighting.fs")
+    lightingShader := rl.LoadShader(RESOURCE_PATH + "shaders/basic_lighting.vs", RESOURCE_PATH + "shaders/basic_lighting.fs")
     uniformLocations := UniformLocations {
         rl.GetShaderLocation(lightingShader, strings.clone_to_cstring("textureIndex")),
         rl.GetShaderLocation(lightingShader, strings.clone_to_cstring("meshDimensions")),
         rl.GetShaderLocation(lightingShader, strings.clone_to_cstring("variant")),
     }
+    fmt.printfln("texIndexLoc %d", uniformLocations.textureIndex)
+    fmt.printfln("meshndim %d", uniformLocations.meshDimensions)
+    fmt.printfln("variant %d", uniformLocations.variant)
 
     staticData := setup_static_data()
 
@@ -1066,9 +1075,9 @@ game_init :: proc() {
     rl.SetMaterialTexture(&material, rl.MaterialMapIndex.ALBEDO, staticData.material_texture_atlas)
 
     itemManager := create_item_manager()
-    load_items_from_file(&itemManager, "res/items.json")
+    load_items_from_file(&itemManager, RESOURCE_PATH + "items.json")
 
-    handImage := rl.LoadImage("res/hands_sheet.png")
+    handImage := rl.LoadImage(RESOURCE_PATH + "hands_sheet.png")
 
     imageAspectRatio := f32(handImage.width) / f32(handImage.height)
     rl.ImageResize(&handImage, i32(SHEET_RESIZED_TILE_SIZE * imageAspectRatio), i32(SHEET_RESIZED_TILE_SIZE))
@@ -1120,6 +1129,31 @@ game_shutdown :: proc() {
 @(export)
 game_shutdown_window :: proc() {
     rl.CloseWindow()
+}
+
+@(export)
+game_memory :: proc() -> rawptr {
+    return gMem
+}
+
+@(export)
+game_memory_size :: proc() -> int {
+    return size_of(GameMemory)
+}
+
+@(export)
+game_hot_reloaded :: proc(mem: rawptr) {
+    gMem = (^GameMemory)(mem) 
+}
+
+@(export)
+game_force_reload :: proc() -> bool {
+    return rl.IsKeyPressed(.F5)
+}
+
+@(export)
+game_force_restart :: proc() -> bool {
+    return rl.IsKeyPressed(.F6)
 }
 
 UniformLocations :: struct {
@@ -1175,6 +1209,7 @@ draw :: proc() {
                 tiling := (meshBb.max - meshBb.min)
                 rl.SetShaderValue(gMem.lightingShader, gMem.uniformLocations.meshDimensions, &tiling, rl.ShaderUniformDataType.VEC3)
                 texIndex := f32(gMem.staticData.meshTextureIndices[inx])
+                //fmt.printfln("texIndex %d", texIndex)
                 rl.SetShaderValue(gMem.lightingShader, gMem.uniformLocations.textureIndex, &texIndex, rl.ShaderUniformDataType.FLOAT)
 
                 rl.DrawMesh(mesh, gMem.material, gMem.staticData.axisAlignedScene.transform)
